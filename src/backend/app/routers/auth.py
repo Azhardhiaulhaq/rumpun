@@ -215,6 +215,8 @@ def google_login(
             db.add(user)
             db.flush()
             _create_household(db, user, None)
+    if not user.is_active:
+        raise ApiError(403, "user_inactive", "User account is inactive")
     response = _token_response(db, user, settings)
     db.add(AuditEvent(actor_user_id=user.id, event_type="session.google_login"))
     try:
@@ -238,9 +240,9 @@ def refresh(
     settings: Settings = Depends(get_settings),
 ) -> TokenResponse:
     session = db.scalar(
-        select(RefreshSession).where(
-            RefreshSession.token_digest == token_digest(payload.refresh_token)
-        )
+        select(RefreshSession)
+        .where(RefreshSession.token_digest == token_digest(payload.refresh_token))
+        .with_for_update()
     )
     now = datetime.now(UTC)
     expires_at = session.expires_at if session is not None else None

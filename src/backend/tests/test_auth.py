@@ -131,3 +131,31 @@ def test_google_verification_create_link_and_failure(client: TestClient, db: Ses
     failed = client.post("/api/v1/auth/google", json={"id_token": "bad-token"})
     assert failed.status_code == 401
     assert failed.json()["error"]["code"] == "invalid_google_token"
+
+
+def test_google_login_rejects_inactive_linked_user(client: TestClient, db: Session) -> None:
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "inactive@example.com",
+            "password": "long-enough-password",
+            "display_name": "Inactive",
+        },
+    )
+    assert registration.status_code == 201
+    user = db.scalar(select(User).where(User.normalized_email == "inactive@example.com"))
+    assert user is not None
+    user.is_active = False
+    db.commit()
+
+    claims = {
+        "sub": "inactive-google-subject",
+        "email": "inactive@example.com",
+        "email_verified": True,
+        "name": "Inactive",
+    }
+    app.dependency_overrides[get_google_verifier] = lambda: FakeGoogleVerifier(claims)
+    response = client.post("/api/v1/auth/google", json={"id_token": "verified-token"})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "user_inactive"
