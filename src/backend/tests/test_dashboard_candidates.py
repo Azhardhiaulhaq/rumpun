@@ -28,6 +28,7 @@ def test_cross_household_access_is_denied(
             "email": "other@example.com",
             "password": "other-long-password",
             "display_name": "Other",
+            "household_name": "Their household",
         },
     ).json()
     response = client.get(

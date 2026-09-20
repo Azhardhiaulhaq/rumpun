@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +33,21 @@ class MembershipRole(enum.StrEnum):
     MEMBER = "member"
     VIEWER = "viewer"
     CHILD = "child"
+
+
+class InviteState(enum.StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    REVOKED = "revoked"
+
+
+class InboxAddressState(enum.StrEnum):
+    # A forwarding address Gmail has not yet confirmed cannot receive mail,
+    # so the two states are tracked separately from simply existing.
+    PENDING_VERIFICATION = "pending_verification"
+    ACTIVE = "active"
+    DISABLED = "disabled"
 
 
 class AccountKind(enum.StrEnum):
@@ -112,6 +128,9 @@ class Household(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
+    # A household created during sign-in carries a generated name. It stays
+    # unnamed until the owner confirms or replaces it in household setup.
+    is_named: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Jakarta", nullable=False)
     locale: Mapped[str] = mapped_column(String(16), default="id-ID", nullable=False)
     base_currency: Mapped[str] = mapped_column(String(3), default="IDR", nullable=False)
@@ -131,6 +150,48 @@ class Membership(Base):
     )
     role: Mapped[MembershipRole] = mapped_column(Enum(MembershipRole), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class HouseholdInvite(Base):
+    """An offer for one email address to join one household.
+
+    Invites are matched on the normalized email that Google verified at sign-in,
+    so accepting one proves the invitee controls the address that was invited.
+    """
+
+    __tablename__ = "household_invites"
+    __table_args__ = (
+        # One live offer per address per household. Resolved invites are kept
+        # for the audit trail, so the constraint only covers pending ones.
+        Index(
+            "uq_household_invites_pending",
+            "household_id",
+            "normalized_email",
+            unique=True,
+            postgresql_where=text("state = 'PENDING'"),
+            sqlite_where=text("state = 'PENDING'"),
+        ),
+        Index("ix_household_invites_lookup", "normalized_email", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    normalized_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    role: Mapped[MembershipRole] = mapped_column(Enum(MembershipRole), nullable=False)
+    state: Mapped[InviteState] = mapped_column(
+        Enum(InviteState), default=InviteState.PENDING, nullable=False
+    )
+    invited_by_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    household: Mapped[Household] = relationship()
+    invited_by: Mapped[User] = relationship()
 
 
 class Category(Base):
@@ -214,6 +275,36 @@ class Posting(Base):
     amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     transaction: Mapped[LedgerTransaction] = relationship(back_populates="postings")
+
+
+class HouseholdInboxAddress(Base):
+    """The address a household forwards its transaction email to.
+
+    One per household, carrying an unguessable local part: anyone who learns
+    it can inject candidates, so it is a secret in the same way a webhook URL
+    is, and it can be rotated without touching anything else.
+    """
+
+    __tablename__ = "household_inbox_addresses"
+    __table_args__ = (UniqueConstraint("local_part"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    local_part: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[InboxAddressState] = mapped_column(
+        Enum(InboxAddressState), default=InboxAddressState.PENDING_VERIFICATION, nullable=False
+    )
+    # Gmail mails a confirmation code to the forwarding address before it will
+    # send anything there. Rumpun receives that mail, so it captures the code
+    # and shows it to the owner instead of making them hunt for it.
+    verification_code: Mapped[str | None] = mapped_column(String(64))
+    verification_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class CandidateSource(Base):

@@ -15,7 +15,15 @@ from starlette.responses import Response
 
 from app.config import get_settings
 from app.errors import ApiError
-from app.routers import auth, candidates, dashboard
+from app.routers import (
+    auth,
+    candidates,
+    dashboard,
+    household,
+    inbox,
+    onboarding,
+    transactions,
+)
 
 logging.basicConfig(format="%(message)s", level=logging.INFO)
 structlog.configure(
@@ -125,5 +133,9 @@ def health() -> dict[str, str]:
 
 
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(onboarding.router, prefix="/api/v1")
+app.include_router(household.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(candidates.router, prefix="/api/v1")
+app.include_router(transactions.router, prefix="/api/v1")
+app.include_router(inbox.router, prefix="/api/v1")

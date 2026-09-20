@@ -1,27 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rumpun_frontend/api/auth_repository.dart';
 import 'package:rumpun_frontend/main.dart';
 
-Future<void> openLogin(WidgetTester tester) async {
-  await tester.pumpWidget(const RumpunApp());
-  await tester.tap(find.byType(InkWell).first);
+import 'fake_backend.dart';
+
+void phone(WidgetTester tester, {Size size = const Size(390, 844)}) {
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+/// The splash resolves the stored session first, so pumpAndSettle lands on
+/// whichever screen that session dictates.
+Future<void> start(WidgetTester tester, {AuthRepository? auth}) async {
+  await tester.pumpWidget(RumpunApp(auth: auth ?? fakeRepository()));
+  await tester.pumpAndSettle();
+}
+
+Future<void> tapGoogle(WidgetTester tester) async {
+  await tester.ensureVisible(find.text('Masuk dengan Google'));
+  await tester.tap(find.text('Masuk dengan Google'));
   await tester.pumpAndSettle();
 }
 
 Future<void> openHome(WidgetTester tester) async {
-  await openLogin(tester);
-  final context = tester.element(find.text('Kembali ke rumah'));
-  Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
-  await tester.pumpAndSettle();
-}
-
-Future<void> chooseDemoState(WidgetTester tester, String state) async {
-  await tester.tap(find.byTooltip('Ubah keadaan layar demo'));
-  await tester.pump(const Duration(seconds: 1));
-  final item = find.widgetWithText(PopupMenuItem<ViewState>, state);
-  final popupItem = tester.widget<PopupMenuItem<ViewState>>(item);
-  Navigator.of(tester.element(item)).pop(popupItem.value);
-  await tester.pump(const Duration(milliseconds: 350));
+  await start(tester, auth: fakeRepository(withStoredToken: true));
 }
 
 void main() {
@@ -29,200 +34,565 @@ void main() {
     TestWidgetsFlutterBinding.ensureInitialized();
   });
 
-  testWidgets('login validates, reveals password, and requests a reset link',
-      (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  group('sign in', () {
+    testWidgets('offers Google as the only way in', (tester) async {
+      phone(tester);
+      await start(tester);
 
-    await openLogin(tester);
-    expect(find.text('Kembali ke rumah'), findsOneWidget);
+      expect(find.text('Masuk dengan Google'), findsOneWidget);
+      expect(find.byType(TextFormField), findsNothing,
+          reason: 'there is no email or password form any more');
+      expect(find.text('Buat akun keluarga'), findsNothing);
+    });
 
-    await tester.enterText(find.byType(TextFormField).at(0), 'alamat-salah');
-    await tester.enterText(find.byType(TextFormField).at(1), 'pendek');
-    await tester.ensureVisible(find.text('Masuk ke Rumpun'));
-    await tester.tap(find.text('Masuk ke Rumpun'));
-    await tester.pump();
-    expect(find.text('Masukkan alamat email yang valid.'), findsOneWidget);
-    expect(find.text('Kata sandi minimal 8 karakter.'), findsOneWidget);
+    testWidgets('a returning member lands straight on the ledger',
+        (tester) async {
+      phone(tester);
+      final fake = fakeAuth();
+      await start(tester, auth: fake.repository);
+      await tapGoogle(tester);
 
-    await tester.tap(find.byTooltip('Tampilkan kata sandi'));
-    await tester.pump();
-    expect(find.byTooltip('Sembunyikan kata sandi'), findsOneWidget);
+      expect(fake.google.initialized, isTrue);
+      expect(fake.google.authenticateCalls, 1);
+      expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text('Halo, $signedInName'), findsOneWidget);
+    });
 
-    await tester.tap(find.text('Lupa kata sandi?'));
-    await tester.pumpAndSettle();
-    expect(find.text('Atur ulang kata sandi'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).last, 'demo@rumpun.app');
-    await tester.tap(find.text('Kirim tautan'));
-    await tester.pumpAndSettle();
-    expect(find.text('Tautan pemulihan demo sudah diminta.'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
+    testWidgets('a first-time member is asked to name the household',
+        (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(isNewUser: true, householdNamed: false),
+      );
+      await tapGoogle(tester);
+
+      expect(find.text('Halo, $signedInName'), findsOneWidget);
+      expect(find.text('Nama rumah tangga'), findsOneWidget);
+      expect(find.text('Total dana keluarga'), findsNothing);
+    });
+
+    testWidgets('dismissing the Google picker leaves the screen untouched',
+        (tester) async {
+      phone(tester);
+      await start(tester, auth: fakeRepository(googleError: canceledPicker()));
+      await tapGoogle(tester);
+
+      expect(find.text('Masuk dengan Google'), findsOneWidget);
+      expect(find.byType(AuthErrorNote), findsNothing,
+          reason: 'cancelling is a choice, not an error');
+    });
+
+    testWidgets('a server rejection is explained and the button comes back',
+        (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(failWithCode: 'invalid_google_token'),
+      );
+      await tapGoogle(tester);
+
+      expect(find.text('Server menolak identitas Google ini. Coba masuk lagi.'),
+          findsOneWidget);
+      expect(find.text('Masuk dengan Google'), findsOneWidget);
+      expect(
+        tester.widget<FilledButton>(find.byType(FilledButton).first).enabled,
+        isTrue,
+      );
+    });
+
+    testWidgets('a build without a client ID says so instead of hiding',
+        (tester) async {
+      phone(tester);
+      await start(tester, auth: fakeRepository(googleConfigured: false));
+
+      expect(find.text('Masuk dengan Google'), findsNothing);
+      expect(find.byType(AuthErrorNote), findsOneWidget);
+      expect(find.textContaining('Google client ID'), findsOneWidget);
+    });
   });
 
-  testWidgets('registration exposes Google, Apple, and email paths',
-      (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  group('household setup', () {
+    Future<FakeAuth> openSetup(WidgetTester tester, {String? failCode}) async {
+      final fake = fakeAuth(
+        isNewUser: true,
+        householdNamed: false,
+        failSetupWithCode: failCode,
+      );
+      await start(tester, auth: fake.repository);
+      await tapGoogle(tester);
+      return fake;
+    }
 
-    await openLogin(tester);
-    await tester.ensureVisible(find.text('Buat akun keluarga'));
-    await tester.tap(find.text('Buat akun keluarga'));
-    await tester.pumpAndSettle();
-    expect(find.text('Daftar dengan Google'), findsOneWidget);
-    expect(find.text('Daftar dengan Apple'), findsOneWidget);
+    testWidgets('rejects a blank name before calling the server',
+        (tester) async {
+      phone(tester);
+      final fake = await openSetup(tester);
 
-    await tester.ensureVisible(find.text('Buat akun dengan email'));
-    await tester.tap(find.text('Buat akun dengan email'));
-    await tester.pump();
-    expect(find.text('Masukkan nama panggilan.'), findsOneWidget);
+      await tester.enterText(find.byType(TextFormField).first, '   ');
+      await tester.tap(find.text('Buka catatan rumah'));
+      await tester.pump();
 
-    final fields = find.byType(TextFormField);
-    await tester.enterText(fields.at(0), 'A');
-    await tester.enterText(fields.at(1), 'a@rumpun.app');
-    await tester.enterText(fields.at(2), 'katakunci-demo');
-    await tester.tap(find.byTooltip('Tampilkan kata sandi'));
-    await tester.tap(find.byType(Checkbox));
-    await tester.tap(find.text('Buat akun dengan email'));
-    await tester.pump(const Duration(milliseconds: 700));
-    await tester.pumpAndSettle();
-    expect(find.text('Total dana keluarga'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
+      expect(find.text('Beri nama rumah tanggamu.'), findsOneWidget);
+      expect(fake.backend.lastSetupBody, isNull);
+    });
+
+    testWidgets('sends the name and currency, then opens the ledger',
+        (tester) async {
+      phone(tester);
+      final fake = await openSetup(tester);
+
+      await tester.enterText(find.byType(TextFormField).first, namedHousehold);
+      await tester.tap(find.text('Buka catatan rumah'));
+      await tester.pumpAndSettle();
+
+      expect(fake.backend.lastSetupBody?['name'], namedHousehold);
+      expect(fake.backend.lastSetupBody?['base_currency'], 'IDR');
+      expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text(namedHousehold), findsOneWidget);
+    });
+
+    testWidgets('a rejected setup keeps the form and its values',
+        (tester) async {
+      phone(tester);
+      await openSetup(tester, failCode: 'unsupported_currency');
+
+      await tester.enterText(find.byType(TextFormField).first, namedHousehold);
+      await tester.tap(find.text('Buka catatan rumah'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mata uang itu belum didukung.'), findsOneWidget);
+      expect(find.text('Buka catatan rumah'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField).first).controller?.text,
+        namedHousehold,
+        reason: 'retyping the name after a server error is busywork',
+      );
+    });
+
+    testWidgets('the currency picker offers the currencies the API accepts',
+        (tester) async {
+      phone(tester);
+      await openSetup(tester);
+
+      await tester.tap(find.text('IDR, Rupiah'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('SGD, Dolar Singapura'), findsWidgets);
+      expect(find.text('USD, Dolar AS'), findsWidgets);
+    });
   });
 
-  testWidgets('Google and Apple registration actions both complete',
-      (tester) async {
-    tester.view.physicalSize = const Size(430, 932);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  group('session', () {
+    testWidgets('a stored session skips sign-in', (tester) async {
+      phone(tester);
+      await openHome(tester);
 
-    await openLogin(tester);
-    Navigator.of(tester.element(find.text('Kembali ke rumah')))
-        .pushNamed('/register');
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Daftar dengan Google'));
-    await tester.pump(const Duration(milliseconds: 700));
-    await tester.pumpAndSettle();
-    expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text('Masuk dengan Google'), findsNothing);
+    });
 
-    Navigator.of(tester.element(find.text('Total dana keluarga')))
-        .pushNamedAndRemoveUntil('/register', (_) => false);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Daftar dengan Apple'));
-    await tester.pump(const Duration(milliseconds: 700));
-    await tester.pumpAndSettle();
-    expect(find.text('Total dana keluarga'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
+    testWidgets('closing the app mid-setup returns to setup', (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(withStoredToken: true, householdNamed: false),
+      );
+
+      expect(find.text('Nama rumah tangga'), findsOneWidget);
+      expect(find.text('Total dana keluarga'), findsNothing);
+    });
+
+    testWidgets('signing out clears the session and Google', (tester) async {
+      phone(tester);
+      final fake = fakeAuth();
+      await start(tester, auth: fake.repository);
+      await tapGoogle(tester);
+
+      await tester.tap(find.byTooltip('Buka profil'));
+      await tester.pumpAndSettle();
+      expect(find.text(signedInEmail), findsOneWidget);
+
+      await tester.tap(find.text('Keluar dari akun'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Masuk dengan Google'), findsOneWidget);
+      expect(fake.google.signOutCalls, 1);
+      expect(fake.repository.isSignedIn, isFalse);
+    });
   });
 
-  testWidgets('home controls and data states perform their actions',
-      (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  group('the ledger', () {
+    testWidgets('shows the household total and its entries', (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          accounts: [account(name: 'Tunai', balance: 1250000)],
+          recent: [
+            ledgerEntry(description: 'Belanja rumah', amount: 286500),
+            ledgerEntry(
+                description: 'Gaji', amount: 4000000, type: 'income'),
+          ],
+        ),
+      );
 
-    await openHome(tester);
+      expect(find.text('Rp 1.250.000'), findsOneWidget);
+      expect(find.text('1 akun tercatat'), findsOneWidget);
+      expect(find.text('Belanja rumah'), findsOneWidget);
+      expect(find.text('−Rp 286.500'), findsOneWidget);
+      expect(find.text('+Rp 4.000.000'), findsOneWidget,
+          reason: 'income is signed so it reads differently from a spend');
+    });
 
-    await tester.tap(find.byTooltip('Sembunyikan saldo'));
-    await tester.pump();
-    expect(find.text('Rp •••••••••'), findsOneWidget);
+    testWidgets('hides the balance on request', (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          accounts: [account(name: 'Tunai', balance: 1250000)],
+        ),
+      );
 
-    await tester.tap(find.text('Catat uang'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Simpan transaksi demo'));
-    await tester.pump();
-    expect(
-        find.text('Isi keperluan dan jumlah terlebih dahulu.'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).at(0), 'Belanja demo');
-    await tester.enterText(find.byType(TextField).at(1), '10000');
-    await tester.tap(find.text('Simpan transaksi demo'));
-    await tester.pumpAndSettle();
-    expect(find.text('Simpan transaksi demo'), findsNothing);
+      await tester.tap(find.byTooltip('Sembunyikan saldo'));
+      await tester.pump();
+      expect(find.text('Rp 1.250.000'), findsNothing);
+      expect(find.textContaining('•'), findsOneWidget);
+    });
 
-    await tester.tap(find.text('Pindah dana'));
-    await tester.pumpAndSettle();
-    expect(
-        find.text(
-            'Alur transfer akan memakai akun asli setelah backend terhubung.'),
-        findsOneWidget);
-    await tester.tap(find.text('Tutup pratinjau'));
-    await tester.pumpAndSettle();
+    testWidgets('an empty ledger says so without claiming a failure',
+        (tester) async {
+      phone(tester);
+      await start(tester, auth: fakeRepository(withStoredToken: true));
 
-    await chooseDemoState(tester, 'Memuat');
-    expect(find.text('Mengambil catatan rumah'), findsOneWidget);
-    await chooseDemoState(tester, 'Kosong');
-    expect(find.text('Belum ada catatan uang'), findsOneWidget);
-    await tester.tap(find.text('Catat transaksi pertama'));
-    await tester.pumpAndSettle();
-    Navigator.of(tester.element(find.text('Catat uang'))).pop();
-    await tester.pumpAndSettle();
-    await chooseDemoState(tester, 'Galat');
-    await tester.tap(find.text('Coba lagi'));
-    await tester.pumpAndSettle();
-    expect(find.text('Total dana keluarga'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
+      expect(find.text('Rp 0'), findsOneWidget);
+      expect(find.text('Belum ada akun'), findsOneWidget);
+      expect(find.text('Belum ada catatan'), findsOneWidget);
+    });
+
+    testWidgets('a failed load offers a retry that works', (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          failDashboardWithCode: 'service_unavailable',
+        ),
+      );
+
+      expect(find.text('Catatan belum dapat dimuat'), findsOneWidget);
+      expect(find.text('Coba lagi'), findsOneWidget);
+    });
+
+    testWidgets('records money and refreshes the ledger', (tester) async {
+      phone(tester);
+      final fake = fakeAuth(
+        withStoredToken: true,
+        accountList: [ledgerAccount(name: 'Tunai')],
+      );
+      await start(tester, auth: fake.repository);
+
+      await tester.tap(find.text('Catat uang'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextFormField).at(0), '286500');
+      await tester.enterText(find.byType(TextFormField).at(1), 'Belanja rumah');
+      await tester.tap(find.text('Simpan catatan'));
+      await tester.pumpAndSettle();
+
+      expect(fake.backend.lastTransactionBody?['amount_atomic'], 286500);
+      expect(fake.backend.lastTransactionBody?['description'], 'Belanja rumah');
+      expect(fake.backend.lastTransactionBody?['transaction_type'], 'expense');
+      expect(find.text('Simpan catatan'), findsNothing,
+          reason: 'a saved entry closes the sheet');
+    });
+
+    testWidgets('formats the amount as it is typed', (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          accountList: [ledgerAccount(name: 'Tunai')],
+        ),
+      );
+      await tester.tap(find.text('Catat uang'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextFormField).at(0), '1250000');
+      await tester.pump();
+      expect(find.text('1.250.000'), findsOneWidget,
+          reason: 'a long number is far easier to check when grouped');
+    });
+
+    testWidgets('switching to income sends the other direction',
+        (tester) async {
+      phone(tester);
+      final fake = fakeAuth(
+        withStoredToken: true,
+        accountList: [ledgerAccount(name: 'Tunai')],
+      );
+      await start(tester, auth: fake.repository);
+
+      await tester.tap(find.text('Catat uang'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Masuk'));
+      await tester.pump();
+      await tester.enterText(find.byType(TextFormField).at(0), '4000000');
+      await tester.enterText(find.byType(TextFormField).at(1), 'Gaji');
+      await tester.tap(find.text('Simpan catatan'));
+      await tester.pumpAndSettle();
+
+      expect(fake.backend.lastTransactionBody?['transaction_type'], 'income');
+    });
+
+    testWidgets('a blank form never reaches the server', (tester) async {
+      phone(tester);
+      final fake = fakeAuth(
+        withStoredToken: true,
+        accountList: [ledgerAccount(name: 'Tunai')],
+      );
+      await start(tester, auth: fake.repository);
+
+      await tester.tap(find.text('Catat uang'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Simpan catatan'));
+      await tester.pump();
+
+      expect(find.text('Isi jumlahnya.'), findsOneWidget);
+      expect(find.text('Tulis keperluannya.'), findsOneWidget);
+      expect(fake.backend.lastTransactionBody, isNull);
+    });
+
+    testWidgets('a retry reuses the same idempotency key', (tester) async {
+      phone(tester);
+      final fake = fakeAuth(
+        withStoredToken: true,
+        accountList: [ledgerAccount(name: 'Tunai')],
+        failTransactionWithCode: 'service_unavailable',
+      );
+      await start(tester, auth: fake.repository);
+
+      await tester.tap(find.text('Catat uang'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField).at(0), '50000');
+      await tester.enterText(find.byType(TextFormField).at(1), 'Kopi');
+      await tester.tap(find.text('Simpan catatan'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Simpan catatan'));
+      await tester.pumpAndSettle();
+
+      // Two attempts at the same entry must not be able to post twice.
+      expect(fake.backend.transactionKeys, hasLength(2));
+      expect(
+        fake.backend.transactionKeys.first,
+        fake.backend.transactionKeys.last,
+      );
+    });
+
+    testWidgets('a rejected save keeps the form and says why', (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          accountList: [ledgerAccount(name: 'Tunai')],
+          failTransactionWithCode: 'ledger_write_denied',
+        ),
+      );
+
+      await tester.tap(find.text('Catat uang'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField).at(0), '1000');
+      await tester.enterText(find.byType(TextFormField).at(1), 'Uji');
+      await tester.tap(find.text('Simpan catatan'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AuthErrorNote), findsOneWidget);
+      expect(find.text('Simpan catatan'), findsOneWidget);
+    });
+
+    testWidgets('a transfer needs two accounts and says so with one',
+        (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          accountList: [ledgerAccount(name: 'Tunai')],
+        ),
+      );
+
+      await tester.tap(find.text('Pindah dana'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('butuh dua akun'), findsOneWidget);
+    });
+
+    testWidgets('a transfer sends both accounts', (tester) async {
+      phone(tester);
+      final fake = fakeAuth(
+        withStoredToken: true,
+        accountList: [
+          ledgerAccount(name: 'Tunai', id: '11111111-1111-1111-1111-111111111111'),
+          ledgerAccount(name: 'Bank', id: '22222222-2222-2222-2222-222222222222'),
+        ],
+      );
+      await start(tester, auth: fake.repository);
+
+      await tester.tap(find.text('Pindah dana'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField).last, '1000000');
+      await tester.tap(find.text('Pindahkan'));
+      await tester.pumpAndSettle();
+
+      expect(fake.backend.lastTransferBody?['from_account_id'],
+          '11111111-1111-1111-1111-111111111111');
+      expect(fake.backend.lastTransferBody?['to_account_id'],
+          '22222222-2222-2222-2222-222222222222');
+      expect(fake.backend.lastTransferBody?['amount_atomic'], 1000000);
+    });
   });
 
-  testWidgets('review supports confirmation, rejection, and all states',
-      (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  group('email forwarding setup', () {
+    Future<FakeAuth> openSetup(
+      WidgetTester tester, {
+      Map<String, dynamic>? address,
+    }) async {
+      final fake = fakeAuth(withStoredToken: true, inboxAddress: address);
+      await start(tester, auth: fake.repository);
+      await tester.tap(find.byTooltip('Buka profil'));
+      await tester.pumpAndSettle();
+      // The sheet scrolls on a short screen, so the button may be below the
+      // fold when the actions grow.
+      await tester.scrollUntilVisible(
+        find.text('Catatan dari email'),
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(find.text('Catatan dari email'));
+      await tester.pumpAndSettle();
+      return fake;
+    }
 
-    await openHome(tester);
-    await tester.tap(find.text('Tinjau'));
-    await tester.pumpAndSettle();
-    expect(find.text('Tinjau dulu'), findsOneWidget);
+    testWidgets('explains the limit before asking for anything',
+        (tester) async {
+      phone(tester);
+      await openSetup(tester);
 
-    await tester.tap(find.text('Toko kebutuhan rumah'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Konfirmasi ke catatan'));
-    await tester.pumpAndSettle();
-    expect(find.text('Transaksi demo dikonfirmasi dan ditambahkan ke catatan.'),
-        findsOneWidget);
+      expect(find.textContaining('tidak pernah membuka kotak masukmu'),
+          findsOneWidget,
+          reason: 'the privacy boundary is the reason this design exists');
+      expect(find.text('Buat alamat rumah'), findsOneWidget);
+    });
 
-    await tester.tap(find.text('Pembayaran layanan'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Konfirmasi ke catatan'));
-    await tester.pump();
-    expect(find.text('Konfirmasi ke catatan'), findsOneWidget);
-    await tester.ensureVisible(find.text('Tolak usulan ini'));
-    await tester.tap(find.text('Tolak usulan ini'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Ya, tolak'));
-    await tester.pumpAndSettle();
-    expect(find.text('Semua sudah ditinjau'), findsOneWidget);
+    testWidgets('creating an address shows the steps', (tester) async {
+      phone(tester);
+      final fake = await openSetup(tester);
 
-    await chooseDemoState(tester, 'Memuat');
-    expect(find.text('Memeriksa email transaksi'), findsOneWidget);
-    await chooseDemoState(tester, 'Galat');
-    expect(find.text('Email belum dapat diperiksa'), findsOneWidget);
-    await tester.tap(find.text('Sinkronkan lagi'));
-    await tester.pumpAndSettle();
-    expect(find.text('Semua sudah ditinjau'), findsOneWidget);
-    await tester.tap(find.text('Periksa ulang email'));
-    await tester.pump();
-    expect(find.text('Semua sudah ditinjau'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
+      await tester.tap(find.text('Buat alamat rumah'));
+      await tester.pumpAndSettle();
+
+      expect(fake.backend.inboxAddressCreated, isTrue);
+      expect(find.text('rumpun-abc123@mail.example.com'), findsOneWidget);
+      expect(find.text('Salin alamat rumahmu'), findsOneWidget);
+    });
+
+    testWidgets("shows Gmail's code once it arrives", (tester) async {
+      phone(tester);
+      await openSetup(
+        tester,
+        address: inboxAddressJson(verificationCode: '123456789'),
+      );
+
+      expect(find.text('123456789'), findsOneWidget,
+          reason: 'digging the code out of a mailbox is the annoying part');
+    });
+
+    testWidgets('an active address reports what it has received',
+        (tester) async {
+      phone(tester);
+      await openSetup(
+        tester,
+        address: inboxAddressJson(state: 'active', messageCount: 3),
+      );
+
+      expect(find.text('Sudah jalan'), findsOneWidget);
+      expect(find.text('3 email sudah diterima.'), findsOneWidget);
+    });
+
+    testWidgets('the steps fit the narrowest phone', (tester) async {
+      phone(tester, size: const Size(320, 568));
+      await openSetup(
+        tester,
+        address: inboxAddressJson(
+          address: 'rumpun-0123456789abcdef@mail.example.com',
+          verificationCode: '123456789',
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('the review inbox', () {
+    testWidgets('confirming sends the candidate and its version',
+        (tester) async {
+      phone(tester);
+      final fake = fakeAuth(
+        withStoredToken: true,
+        candidates: [
+          candidateJson(description: 'Toko kebutuhan rumah', amount: 286500),
+        ],
+      );
+      await start(tester, auth: fake.repository);
+      await tester.tap(find.text('Tinjau'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Toko kebutuhan rumah'), findsOneWidget);
+      expect(find.text('Rp 286.500'), findsOneWidget);
+
+      await tester.tap(find.text('Masukkan ke catatan'));
+      await tester.pumpAndSettle();
+      expect(fake.backend.confirmedCandidateId, candidateId);
+    });
+
+    testWidgets('a candidate missing an amount cannot be confirmed',
+        (tester) async {
+      phone(tester);
+      await start(
+        tester,
+        auth: fakeRepository(
+          withStoredToken: true,
+          candidates: [candidateJson(description: 'Pembayaran', amount: null)],
+        ),
+      );
+      await tester.tap(find.text('Tinjau'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Jumlah belum terbaca'), findsOneWidget);
+      final confirm = tester.widget<FilledButton>(
+          find.widgetWithText(FilledButton, 'Masukkan ke catatan'));
+      expect(confirm.enabled, isFalse,
+          reason: 'confirming a half-read email would post a wrong number');
+    });
+
+    testWidgets('an empty inbox does not claim email is connected',
+        (tester) async {
+      phone(tester);
+      await start(tester, auth: fakeRepository(withStoredToken: true));
+      await tester.tap(find.text('Tinjau'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tidak ada yang menunggu'), findsOneWidget);
+    });
   });
 
   testWidgets('narrow phone layout has no render overflow', (tester) async {
-    tester.view.physicalSize = const Size(320, 568);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+    phone(tester, size: const Size(320, 568));
+    await openHome(tester);
+    expect(tester.takeException(), isNull);
 
-    await openLogin(tester);
-    Navigator.of(tester.element(find.text('Kembali ke rumah')))
-        .pushNamedAndRemoveUntil('/home', (_) => false);
-    await tester.pumpAndSettle();
-    tester.takeException();
     await tester.tap(find.text('Tinjau'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

@@ -16,6 +16,8 @@ from app.models import (
     Category,
     FinancialAccount,
     Household,
+    HouseholdInvite,
+    InviteState,
     Membership,
     MembershipRole,
     PasswordCredential,
@@ -27,6 +29,7 @@ from app.rate_limit import sensitive_endpoint
 from app.schemas import (
     GoogleLoginRequest,
     HouseholdContext,
+    InviteSummary,
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
@@ -48,16 +51,40 @@ from app.security import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-def _first_context(db: Session, user_id: uuid.UUID) -> tuple[Membership, Household]:
+def _first_context(
+    db: Session, user_id: uuid.UUID
+) -> tuple[Membership, Household] | None:
+    """The user's default household, or None while they have not joined one."""
     row = db.execute(
         select(Membership, Household)
         .join(Household, Household.id == Membership.household_id)
         .where(Membership.user_id == user_id)
         .order_by(Membership.created_at)
     ).first()
-    if row is None:
-        raise ApiError(403, "household_context_missing", "User has no household context")
-    return row[0], row[1]
+    return (row[0], row[1]) if row is not None else None
+
+
+def pending_invites_for(db: Session, email: str) -> list[InviteSummary]:
+    rows = db.execute(
+        select(HouseholdInvite, Household, User)
+        .join(Household, Household.id == HouseholdInvite.household_id)
+        .join(User, User.id == HouseholdInvite.invited_by_id)
+        .where(
+            HouseholdInvite.normalized_email == normalize_email(email),
+            HouseholdInvite.state == InviteState.PENDING,
+        )
+        .order_by(HouseholdInvite.created_at)
+    ).all()
+    return [
+        InviteSummary(
+            id=invite.id,
+            household_name=household.name,
+            role=invite.role,
+            invited_by_name=inviter.display_name,
+            created_at=invite.created_at,
+        )
+        for invite, household, inviter in rows
+    ]
 
 
 def _token_response(
@@ -66,29 +93,46 @@ def _token_response(
     settings: Settings,
     *,
     family_id: uuid.UUID | None = None,
+    is_new_user: bool = False,
 ) -> TokenResponse:
-    membership, household = _first_context(db, user.id)
+    context = _first_context(db, user.id)
     refresh_token, refresh_session = create_refresh_session(user.id, settings)
     if family_id:
         refresh_session.family_id = family_id
     db.add(refresh_session)
     db.flush()
+
+    household_context = None
+    if context is not None:
+        membership, household = context
+        household_context = HouseholdContext(
+            id=household.id,
+            name=household.name,
+            role=membership.role,
+            base_currency=household.base_currency,
+            is_named=household.is_named,
+        )
+
     return TokenResponse(
         access_token=create_access_token(user.id, settings),
         refresh_token=refresh_token,
         expires_in=settings.access_token_minutes * 60,
         user=UserResponse.model_validate(user),
-        household=HouseholdContext(
-            id=household.id,
-            name=household.name,
-            role=membership.role,
-            base_currency=household.base_currency,
+        household=household_context,
+        is_new_user=is_new_user,
+        # Only offered while the user has nowhere to land; a member who already
+        # belongs somewhere reviews invites from inside the app instead.
+        pending_invites=(
+            pending_invites_for(db, user.email) if household_context is None else []
         ),
     )
 
 
 def _create_household(db: Session, user: User, requested_name: str | None) -> Household:
-    household = Household(name=requested_name or f"{user.display_name}'s household")
+    household = Household(
+        name=requested_name or f"Rumah {user.display_name}",
+        is_named=requested_name is not None,
+    )
     db.add(household)
     db.flush()
     db.add(Membership(household_id=household.id, user_id=user.id, role=MembershipRole.OWNER))
@@ -136,17 +180,24 @@ def register(
         db.add(user)
         db.flush()
         db.add(PasswordCredential(user_id=user.id, password_hash=hash_password(payload.password)))
-        household = _create_household(db, user, payload.household_name)
+        # A household is only created when the caller names one. Registering
+        # without a name leaves the user in onboarding, where they can accept a
+        # pending invitation instead of starting a household they do not want.
+        household = (
+            _create_household(db, user, payload.household_name)
+            if payload.household_name
+            else None
+        )
         db.add(
             AuditEvent(
-                household_id=household.id,
+                household_id=household.id if household else None,
                 actor_user_id=user.id,
                 event_type="user.registered",
                 target_type="user",
                 target_id=user.id,
             )
         )
-        response = _token_response(db, user, settings)
+        response = _token_response(db, user, settings, is_new_user=True)
         db.commit()
         return response
     except IntegrityError as exc:
@@ -196,6 +247,7 @@ def google_login(
     subject = str(claims["sub"])
     normalized = normalize_email(str(claims["email"]))
     user = db.scalar(select(User).where(User.google_subject == subject))
+    created = False
     if user is None:
         user = db.scalar(select(User).where(User.normalized_email == normalized))
         if user and user.google_subject and user.google_subject != subject:
@@ -205,6 +257,7 @@ def google_login(
         if user:
             user.google_subject = subject
         else:
+            created = True
             display_name = str(claims.get("name") or normalized.split("@", 1)[0])[:120]
             user = User(
                 email=str(claims["email"]),
@@ -214,10 +267,12 @@ def google_login(
             )
             db.add(user)
             db.flush()
-            _create_household(db, user, None)
+            # No household is created here. A first-time user chooses between
+            # starting one and accepting an invite, otherwise an invited member
+            # would land in an empty household of their own.
     if not user.is_active:
         raise ApiError(403, "user_inactive", "User account is inactive")
-    response = _token_response(db, user, settings)
+    response = _token_response(db, user, settings, is_new_user=created)
     db.add(AuditEvent(actor_user_id=user.id, event_type="session.google_login"))
     try:
         db.commit()

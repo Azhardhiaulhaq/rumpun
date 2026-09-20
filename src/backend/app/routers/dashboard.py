@@ -112,7 +112,10 @@ def dashboard(
                 transaction_type=transaction.transaction_type,
                 description=transaction.description,
                 occurred_at=transaction.occurred_at,
-                amount_atomic=amount,
+                # The magnitude, not the signed posting: transaction_type
+                # already carries the direction, and returning both would let
+                # a client negate it twice.
+                amount_atomic=abs(amount),
                 currency=currency,
             )
         )

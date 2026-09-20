@@ -1,4 +1,4 @@
-package app.rumpun.rumpun_frontend
+package app.rumpun.mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -5,6 +5,10 @@ from datetime import UTC, datetime
 
 os.environ.setdefault("RUMPUN_JWT_SECRET", "test-secret-that-is-longer-than-thirty-two-characters")
 os.environ.setdefault("RUMPUN_DATABASE_URL", "sqlite:///./test.db")
+# The inbound webhook is disabled without a secret, so the tests set one.
+# Assigned rather than setdefault because compose passes an empty value
+# through, which setdefault would keep.
+os.environ["RUMPUN_INBOUND_WEBHOOK_SECRET"] = "test-inbound-secret"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +20,17 @@ from app.database import Base, get_db
 from app.main import app
 from app.models import CandidateSource, CandidateState, Membership, TransactionCandidate
 from app.rate_limit import limiter
+
+
+@pytest.fixture
+def settings():
+    """The running configuration, so tests sign webhooks with the real secret."""
+    from app.config import get_settings
+
+    # Settings are cached for the process; the env above may have been read
+    # before this module was imported.
+    get_settings.cache_clear()
+    return get_settings()
 
 
 @pytest.fixture

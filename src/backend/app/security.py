@@ -71,6 +71,13 @@ class AuthContext:
     household: Household
 
 
+@dataclass(frozen=True)
+class UserContext:
+    """A signed-in user who may not belong to a household yet."""
+
+    user: User
+
+
 def decode_access_token(token: str, settings: Settings) -> uuid.UUID:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
@@ -79,6 +86,25 @@ def decode_access_token(token: str, settings: Settings) -> uuid.UUID:
         return uuid.UUID(payload["sub"])
     except (jwt.PyJWTError, ValueError, KeyError) as exc:
         raise ApiError(401, "invalid_access_token", "Access token is invalid") from exc
+
+
+def get_user_context(
+    authorization: Annotated[str | None, Header()] = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserContext:
+    """Authentication without requiring a household.
+
+    Used by the endpoints a user reaches between signing in and joining a
+    household, where `get_auth_context` would reject them.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise ApiError(401, "authentication_required", "Authentication is required")
+    user_id = decode_access_token(authorization.removeprefix("Bearer "), settings)
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        raise ApiError(401, "authentication_required", "Authentication is required")
+    return UserContext(user=user)
 
 
 def get_auth_context(

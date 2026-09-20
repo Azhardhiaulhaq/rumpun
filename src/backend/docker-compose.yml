@@ -19,9 +19,14 @@ services:
       RUMPUN_DATABASE_URL: postgresql+psycopg://rumpun:local-only-password@db:5432/rumpun
       RUMPUN_JWT_SECRET: local-compose-secret-change-before-deploying
       RUMPUN_GOOGLE_CLIENT_ID: ${RUMPUN_GOOGLE_CLIENT_ID:-}
+      # Raise for contract-test runs, which sign up many users in a few seconds.
+      RUMPUN_RATE_LIMIT_ATTEMPTS: ${RUMPUN_RATE_LIMIT_ATTEMPTS:-10}
+      RUMPUN_INBOUND_EMAIL_DOMAIN: ${RUMPUN_INBOUND_EMAIL_DOMAIN:-invalid.example}
+      RUMPUN_INBOUND_WEBHOOK_SECRET: ${RUMPUN_INBOUND_WEBHOOK_SECRET:-}
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
-      - "8000:8000"
+      # Overridable because another local service may already hold 8000.
+      - "${RUMPUN_API_PORT:-8000}:8000"
     volumes:
       - ./app:/app/app
       - ./alembic:/app/alembic

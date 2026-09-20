@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     rate_limit_attempts: int = 10
     rate_limit_window_seconds: int = 60
 
+    # Inbound email forwarding. The domain is what household addresses are
+    # built on; the secret authenticates the mail provider's webhook, because
+    # anything that can call it can create candidates.
+    # Deliberately unroutable: an install that forgets to set this should
+    # produce an address that cannot receive mail, not one pointing at a
+    # domain somebody else owns.
+    inbound_email_domain: str = "invalid.example"
+    inbound_webhook_secret: str | None = None
+    # Bodies are kept only long enough for a person to review the candidate.
+    inbound_retain_body_days: int = 30
+
     @field_validator("jwt_secret")
     @classmethod
     def reject_default_secret(cls, value: str) -> str:
