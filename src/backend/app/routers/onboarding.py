@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.currency import normalize_currency
 from app.database import get_db
 from app.errors import ApiError
 from app.models import (
@@ -37,16 +38,12 @@ from app.security import UserContext, get_user_context
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
-def create_household_for(
-    db: Session, user: User, name: str, base_currency: str
-) -> Household:
+def create_household_for(db: Session, user: User, name: str, base_currency: str) -> Household:
     """Creates a household with its starting categories and accounts."""
     household = Household(name=name.strip(), base_currency=base_currency, is_named=True)
     db.add(household)
     db.flush()
-    db.add(
-        Membership(household_id=household.id, user_id=user.id, role=MembershipRole.OWNER)
-    )
+    db.add(Membership(household_id=household.id, user_id=user.id, role=MembershipRole.OWNER))
     db.add_all(
         [
             Category(household_id=household.id, name="General expense", category_type="expense"),
@@ -84,9 +81,7 @@ def _invite_for(db: Session, invite_id: uuid.UUID, user: User) -> HouseholdInvit
     if invite is None or invite.normalized_email != user.normalized_email:
         raise ApiError(404, "invite_not_found", "Invitation not found")
     if invite.state != InviteState.PENDING:
-        raise ApiError(
-            409, "invite_already_resolved", "This invitation is no longer open"
-        )
+        raise ApiError(409, "invite_already_resolved", "This invitation is no longer open")
     return invite
 
 
@@ -114,7 +109,7 @@ def create_my_household(
     _reject_if_already_joined(db, user)
 
     household = create_household_for(
-        db, user, payload.name, payload.base_currency.upper()
+        db, user, payload.name, normalize_currency(payload.base_currency)
     )
     db.add(
         AuditEvent(
@@ -149,11 +144,7 @@ def accept_invite(
 
     invite.state = InviteState.ACCEPTED
     invite.resolved_at = utcnow()
-    db.add(
-        Membership(
-            household_id=invite.household_id, user_id=user.id, role=invite.role
-        )
-    )
+    db.add(Membership(household_id=invite.household_id, user_id=user.id, role=invite.role))
     db.add(
         AuditEvent(
             household_id=invite.household_id,

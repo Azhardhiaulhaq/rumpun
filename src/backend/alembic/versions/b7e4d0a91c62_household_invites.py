@@ -15,9 +15,7 @@ down_revision: Union[str, None] = "a3f9c17b2e84"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-INVITE_STATE = sa.Enum(
-    "PENDING", "ACCEPTED", "DECLINED", "REVOKED", name="invitestate"
-)
+INVITE_STATE = sa.Enum("PENDING", "ACCEPTED", "DECLINED", "REVOKED", name="invitestate")
 
 
 def _membership_role() -> sa.types.TypeEngine[str]:
@@ -72,9 +70,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["invited_by_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_household_invites_household_id", "household_invites", ["household_id"]
-    )
+    op.create_index("ix_household_invites_household_id", "household_invites", ["household_id"])
     op.create_index(
         "ix_household_invites_lookup",
         "household_invites",

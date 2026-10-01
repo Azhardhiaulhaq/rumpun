@@ -33,8 +33,9 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('an unreachable server explains itself instead of hanging',
-      (tester) async {
+  testWidgets('an unreachable server explains itself instead of hanging', (
+    tester,
+  ) async {
     phone(tester);
     await tester.pumpWidget(
       RumpunApp(auth: fakeRepository(failWithCode: 'service_unavailable')),
@@ -66,22 +67,28 @@ void main() {
     expect(note.right, lessThanOrEqualTo(320));
   });
 
-  testWidgets('the sign-in screen fits the narrowest supported phone',
-      (tester) async {
+  testWidgets('the sign-in screen fits the narrowest supported phone', (
+    tester,
+  ) async {
     phone(tester);
     await tester.pumpWidget(RumpunApp(auth: fakeRepository()));
     await tester.pump();
-    expect(tester.takeException(), isNull,
-        reason: 'splash must not overflow before the session resolves');
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'splash must not overflow before the session resolves',
+    );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
   testWidgets('the household setup form fits a narrow phone', (tester) async {
     phone(tester);
-    await tester.pumpWidget(RumpunApp(
-      auth: fakeRepository(withStoredToken: true, householdNamed: false),
-    ));
+    await tester.pumpWidget(
+      RumpunApp(
+        auth: fakeRepository(withStoredToken: true, householdNamed: false),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Nama rumah tangga'), findsOneWidget);
@@ -90,9 +97,11 @@ void main() {
 
   testWidgets('every auth control is reachable by keyboard', (tester) async {
     phone(tester, size: const Size(390, 844));
-    await tester.pumpWidget(RumpunApp(
-      auth: fakeRepository(withStoredToken: true, householdNamed: false),
-    ));
+    await tester.pumpWidget(
+      RumpunApp(
+        auth: fakeRepository(withStoredToken: true, householdNamed: false),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.byType(TextFormField).first);

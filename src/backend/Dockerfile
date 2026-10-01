@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir .
 RUN useradd --create-home --uid 10001 rumpun && chown -R rumpun:rumpun /app
 USER rumpun
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

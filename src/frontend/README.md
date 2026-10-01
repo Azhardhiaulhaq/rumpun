@@ -6,7 +6,7 @@ A phone-first Flutter client for the initial Rumpun flow:
 - Google sign-in, the only way into the app
 - onboarding: create a household, or accept an invitation waiting for your email
 - the ledger: real balances, recording money, and moving it between accounts
-- the review inbox for transactions read from forwarded email
+- the review inbox for proposed transactions from Gmail or forwarded email
 - member roster with email invitations and withdrawal
 - home with balance privacy control and transaction actions
 - transaction review with editable confirmation and rejection
@@ -30,8 +30,9 @@ cp .env.example .env
 
 Recording money requires an `Idempotency-Key`, generated once per sheet rather than per attempt, so a retry on a weak connection cannot post the same amount twice.
 
-Email forwarding setup lives under Profil, then Catatan dari email.
-The operational side, DNS, the mail provider, and the webhook secret, is in `docs/email-forwarding-setup.md`.
+The one-tap Gmail connection lives under Profil, then Hubungkan Gmail.
+The backend setup and Google verification requirements are in `docs/gmail-connect-setup.md`.
+The older forwarding endpoint is documented in `docs/email-forwarding-setup.md`.
 
 Signing in does not create a household. A first-time user lands on onboarding and either starts one or accepts an invitation sent to their email, so an invited family member joins the existing ledger instead of an empty one of their own.
 

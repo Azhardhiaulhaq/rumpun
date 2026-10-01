@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     refresh_token_days: int = 30
     google_client_id: str | None = None
     google_issuers: tuple[str, ...] = ("accounts.google.com", "https://accounts.google.com")
+    gmail_oauth_client_id: str | None = None
+    gmail_oauth_client_secret: str | None = None
+    gmail_oauth_redirect_uri: str | None = None
+    gmail_token_key: str | None = None
+    gmail_sync_minutes: int = Field(default=30, ge=1)
+    jev_api_key: str | None = None
+    firebase_project_id: str | None = None
     rate_limit_attempts: int = 10
     rate_limit_window_seconds: int = 60
 
@@ -34,6 +41,17 @@ class Settings(BaseSettings):
     def reject_default_secret(cls, value: str) -> str:
         if value in {"change-me", "secret", "development-secret"}:
             raise ValueError("RUMPUN_JWT_SECRET must not use a known default")
+        return value
+
+    @field_validator("gmail_oauth_redirect_uri")
+    @classmethod
+    def require_safe_gmail_redirect(cls, value: str | None) -> str | None:
+        if value and not (
+            value.startswith("https://")
+            or value.startswith("http://localhost:")
+            or value.startswith("http://127.0.0.1:")
+        ):
+            raise ValueError("Gmail OAuth redirect URI must use HTTPS or local loopback")
         return value
 
 

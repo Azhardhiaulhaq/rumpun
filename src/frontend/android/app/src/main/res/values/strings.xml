@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rumpun_notification_channel_id" translatable="false">rumpun_household</string>
+    <string name="rumpun_notification_channel_name">Kabar rumah tangga</string>
+    <string name="rumpun_notification_channel_description">Transaksi baru untuk ditinjau dan pengingat anggaran.</string>
+</resources>

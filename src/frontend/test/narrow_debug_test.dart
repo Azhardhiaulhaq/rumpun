@@ -16,10 +16,12 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(MaterialApp(
-        theme: ThemeData(fontFamily: 'NotoSans'),
-        home: entry.value,
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(fontFamily: 'NotoSans'),
+          home: entry.value,
+        ),
+      );
       await tester.pump();
       expect(tester.takeException(), isNull);
     });

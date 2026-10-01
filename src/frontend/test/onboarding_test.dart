@@ -33,14 +33,18 @@ Future<FakeAuth> signIn(
 
 void main() {
   group('a user who belongs nowhere', () {
-    testWidgets('is asked to create or join, not dropped into a ledger',
-        (tester) async {
+    testWidgets('is asked to create or join, not dropped into a ledger', (
+      tester,
+    ) async {
       phone(tester);
       await signIn(tester);
 
       expect(find.text('Buat rumah tangga baru'), findsOneWidget);
-      expect(find.text('Total dana keluarga'), findsNothing,
-          reason: 'landing in an empty ledger would hide the invite path');
+      expect(
+        find.text('Total aset keluarga'),
+        findsNothing,
+        reason: 'landing in an empty ledger would hide the invite path',
+      );
     });
 
     testWidgets('creating a household opens the ledger', (tester) async {
@@ -56,36 +60,44 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(fake.backend.lastSetupBody?['name'], namedHousehold);
-      expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text('Total aset keluarga'), findsOneWidget);
       expect(find.text(namedHousehold), findsOneWidget);
     });
 
-    testWidgets('closing the app before choosing returns to the choice',
-        (tester) async {
+    testWidgets('closing the app before choosing returns to the choice', (
+      tester,
+    ) async {
       phone(tester);
-      await tester.pumpWidget(RumpunApp(
-        auth: fakeRepository(withStoredToken: true, withHousehold: false),
-      ));
+      await tester.pumpWidget(
+        RumpunApp(
+          auth: fakeRepository(withStoredToken: true, withHousehold: false),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Buat rumah tangga baru'), findsOneWidget);
-      expect(find.text('Total dana keluarga'), findsNothing);
+      expect(find.text('Total aset keluarga'), findsNothing);
     });
   });
 
   group('invitations', () {
-    testWidgets('an invited user sees who invited them and to what',
-        (tester) async {
+    testWidgets('an invited user sees who invited them and to what', (
+      tester,
+    ) async {
       phone(tester);
       await signIn(tester, invites: 1);
 
       expect(find.text(invitingHousehold), findsOneWidget);
-      expect(find.text('Budi mengundangmu sebagai Anggota.'), findsOneWidget,
-          reason: 'who invited you, and as what, in plain words');
+      expect(
+        find.text('Budi mengundangmu sebagai Anggota.'),
+        findsOneWidget,
+        reason: 'who invited you, and as what, in plain words',
+      );
     });
 
-    testWidgets('accepting joins that household and opens its ledger',
-        (tester) async {
+    testWidgets('accepting joins that household and opens its ledger', (
+      tester,
+    ) async {
       phone(tester);
       final fake = await signIn(tester, invites: 1);
 
@@ -93,13 +105,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(fake.backend.acceptedInviteId, inviteId);
-      expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text('Total aset keluarga'), findsOneWidget);
       expect(find.text(invitingHousehold), findsOneWidget);
       expect(fake.repository.session?.household?.role, 'member');
     });
 
-    testWidgets('declining leaves the user free to start their own',
-        (tester) async {
+    testWidgets('declining leaves the user free to start their own', (
+      tester,
+    ) async {
       phone(tester);
       final fake = await signIn(tester, invites: 1);
 
@@ -108,12 +121,16 @@ void main() {
 
       expect(fake.backend.declinedInviteId, inviteId);
       expect(find.text(invitingHousehold), findsNothing);
-      expect(find.text('Buat rumah tangga baru'), findsOneWidget,
-          reason: 'the only remaining path becomes the primary action');
+      expect(
+        find.text('Buat rumah tangga baru'),
+        findsOneWidget,
+        reason: 'the only remaining path becomes the primary action',
+      );
     });
 
-    testWidgets('an invitation that was already answered explains itself',
-        (tester) async {
+    testWidgets('an invitation that was already answered explains itself', (
+      tester,
+    ) async {
       phone(tester);
       await signIn(
         tester,
@@ -125,11 +142,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Undangan ini sudah tidak berlaku.'), findsOneWidget);
-      expect(find.text('Total dana keluarga'), findsNothing);
+      expect(find.text('Total aset keluarga'), findsNothing);
     });
 
-    testWidgets('a second tap cannot answer the same invite twice',
-        (tester) async {
+    testWidgets('a second tap cannot answer the same invite twice', (
+      tester,
+    ) async {
       phone(tester);
       final fake = await signIn(tester, invites: 1);
       fake.backend.latency = const Duration(milliseconds: 300);
@@ -138,16 +156,23 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       // While the first request is in flight, neither answer is tappable.
-      expect(find.textContaining('Gabung'), findsNothing,
-          reason: 'the accept label is replaced by a spinner');
+      expect(
+        find.textContaining('Gabung'),
+        findsNothing,
+        reason: 'the accept label is replaced by a spinner',
+      );
       final decline = tester.widget<TextButton>(
-          find.widgetWithText(TextButton, 'Tolak undangan'));
-      expect(decline.enabled, isFalse,
-          reason: 'declining mid-accept would race the server');
+        find.widgetWithText(TextButton, 'Tolak undangan'),
+      );
+      expect(
+        decline.enabled,
+        isFalse,
+        reason: 'declining mid-accept would race the server',
+      );
 
       await tester.pumpAndSettle();
       expect(fake.backend.acceptCalls, 1);
-      expect(find.text('Total dana keluarga'), findsOneWidget);
+      expect(find.text('Total aset keluarga'), findsOneWidget);
     });
   });
 
@@ -175,10 +200,18 @@ void main() {
 
     testWidgets('shows members and marks which one is you', (tester) async {
       phone(tester);
-      await openPeople(tester, members: [
-        member(name: 'Budi', email: 'budi@rumpun.app', role: 'owner', isYou: true),
-        member(name: 'Siti', email: 'siti@rumpun.app'),
-      ]);
+      await openPeople(
+        tester,
+        members: [
+          member(
+            name: 'Budi',
+            email: 'budi@rumpun.app',
+            role: 'owner',
+            isYou: true,
+          ),
+          member(name: 'Siti', email: 'siti@rumpun.app'),
+        ],
+      );
 
       expect(find.text('Budi (kamu)'), findsOneWidget);
       expect(find.text('Siti'), findsOneWidget);
@@ -187,13 +220,24 @@ void main() {
 
     testWidgets('sends an invite with the chosen role', (tester) async {
       phone(tester);
-      final fake = await openPeople(tester, members: [
-        member(name: 'Budi', email: 'budi@rumpun.app', role: 'owner', isYou: true),
-      ]);
+      final fake = await openPeople(
+        tester,
+        members: [
+          member(
+            name: 'Budi',
+            email: 'budi@rumpun.app',
+            role: 'owner',
+            isYou: true,
+          ),
+        ],
+      );
 
       await tester.tap(find.text('Undang lewat email'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextFormField).first, 'siti@rumpun.app');
+      await tester.enterText(
+        find.byType(TextFormField).first,
+        'siti@rumpun.app',
+      );
       await tester.tap(find.text('Kirim undangan'));
       await tester.pumpAndSettle();
 
@@ -201,20 +245,29 @@ void main() {
       expect(fake.backend.lastInviteBody?['role'], 'member');
     });
 
-    testWidgets('a rejected invite keeps the sheet open with the reason',
-        (tester) async {
+    testWidgets('a rejected invite keeps the sheet open with the reason', (
+      tester,
+    ) async {
       phone(tester);
       await openPeople(
         tester,
         members: [
-          member(name: 'Budi', email: 'b@rumpun.app', role: 'owner', isYou: true)
+          member(
+            name: 'Budi',
+            email: 'b@rumpun.app',
+            role: 'owner',
+            isYou: true,
+          ),
         ],
         failInviteWithCode: 'already_a_member',
       );
 
       await tester.tap(find.text('Undang lewat email'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextFormField).first, 'siti@rumpun.app');
+      await tester.enterText(
+        find.byType(TextFormField).first,
+        'siti@rumpun.app',
+      );
       await tester.tap(find.text('Kirim undangan'));
       await tester.pumpAndSettle();
 
@@ -224,9 +277,17 @@ void main() {
 
     testWidgets('an invalid email never reaches the server', (tester) async {
       phone(tester);
-      final fake = await openPeople(tester, members: [
-        member(name: 'Budi', email: 'b@rumpun.app', role: 'owner', isYou: true)
-      ]);
+      final fake = await openPeople(
+        tester,
+        members: [
+          member(
+            name: 'Budi',
+            email: 'b@rumpun.app',
+            role: 'owner',
+            isYou: true,
+          ),
+        ],
+      );
 
       await tester.tap(find.text('Undang lewat email'));
       await tester.pumpAndSettle();
@@ -243,7 +304,12 @@ void main() {
       final fake = await openPeople(
         tester,
         members: [
-          member(name: 'Budi', email: 'b@rumpun.app', role: 'owner', isYou: true)
+          member(
+            name: 'Budi',
+            email: 'b@rumpun.app',
+            role: 'owner',
+            isYou: true,
+          ),
         ],
         openInvites: [openInvite(email: 'siti@rumpun.app')],
       );
@@ -255,17 +321,21 @@ void main() {
       expect(fake.backend.revokedInviteId, inviteId);
     });
 
-    testWidgets('the roster fits the narrowest supported phone',
-        (tester) async {
+    testWidgets('the roster fits the narrowest supported phone', (
+      tester,
+    ) async {
       phone(tester, size: const Size(320, 568));
-      await openPeople(tester, members: [
-        member(
-          name: 'Nama Yang Sangat Panjang Sekali Untuk Diuji',
-          email: 'alamat.email.yang.panjang.sekali@contoh-rumpun.app',
-          role: 'owner',
-          isYou: true,
-        ),
-      ]);
+      await openPeople(
+        tester,
+        members: [
+          member(
+            name: 'Nama Yang Sangat Panjang Sekali Untuk Diuji',
+            email: 'alamat.email.yang.panjang.sekali@contoh-rumpun.app',
+            role: 'owner',
+            isYou: true,
+          ),
+        ],
+      );
 
       expect(tester.takeException(), isNull);
     });

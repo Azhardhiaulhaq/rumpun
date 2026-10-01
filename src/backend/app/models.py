@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -20,6 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.currency import default_minor_unit
 from app.database import Base
 
 
@@ -123,6 +126,123 @@ class RefreshSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class GmailOAuthAttempt(Base):
+    __tablename__ = "gmail_oauth_attempts"
+    __table_args__ = (Index("ix_gmail_oauth_attempts_expires", "expires_at"),)
+
+    state_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GmailConnection(Base):
+    __tablename__ = "gmail_connections"
+    __table_args__ = (
+        UniqueConstraint("user_id", "household_id"),
+        Index("ix_gmail_connections_due", "status", "last_synced_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    google_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    google_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    refresh_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    history_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GmailMessage(Base):
+    __tablename__ = "gmail_messages"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "gmail_message_id"),
+        Index("ix_gmail_messages_pending", "connection_id", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("gmail_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    gmail_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default="awaiting_jev", nullable=False)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GmailSyncJob(Base):
+    __tablename__ = "gmail_sync_jobs"
+    __table_args__ = (Index("ix_gmail_sync_jobs_pending", "status", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("gmail_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    discovered_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Messages still waiting for classification when the job ended. The
+    # scheduled pass retries them, so a nonzero value is not a failure.
+    unclassified_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PushDevice(Base):
+    __tablename__ = "push_devices"
+    __table_args__ = (Index("ix_push_devices_user", "user_id", "household_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NotificationOutbox(Base):
+    __tablename__ = "notification_outbox"
+    __table_args__ = (Index("ix_notification_outbox_due", "status", "next_attempt_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    event_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str] = mapped_column(String(240), nullable=False)
+    data_json: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Household(Base):
     __tablename__ = "households"
 
@@ -204,11 +324,22 @@ class Category(Base):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     category_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    budget_atomic: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class FinancialAccount(Base):
     __tablename__ = "financial_accounts"
-    __table_args__ = (UniqueConstraint("household_id", "id"),)
+    __table_args__ = (
+        UniqueConstraint("household_id", "id"),
+        Index(
+            "uq_household_equity_currency",
+            "household_id",
+            "currency",
+            unique=True,
+            postgresql_where=text("kind = 'EQUITY'"),
+            sqlite_where=text("kind = 'EQUITY'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID] = mapped_column(
@@ -216,9 +347,38 @@ class FinancialAccount(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     kind: Mapped[AccountKind] = mapped_column(Enum(AccountKind), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), default="IDR", nullable=False)
+    currency: Mapped[str] = mapped_column(String(12), default="IDR", nullable=False)
+    minor_unit: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda context: default_minor_unit(context.get_current_parameters()["currency"]),
+        nullable=False,
+    )
+    unit: Mapped[str | None] = mapped_column(String(40))
     visibility: Mapped[str] = mapped_column(String(16), default="household", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AssetValuation(Base):
+    __tablename__ = "asset_valuations"
+    __table_args__ = (
+        Index("ix_asset_valuations_latest", "household_id", "account_id", "effective_at"),
+        CheckConstraint("value_atomic >= 0", name="valuation_nonnegative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("financial_accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    value_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(12), nullable=False)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(120), default="manual", nullable=False)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -240,17 +400,26 @@ class AccountAccessGrant(Base):
 
 class LedgerTransaction(Base):
     __tablename__ = "ledger_transactions"
-    __table_args__ = (UniqueConstraint("household_id", "id"),)
+    __table_args__ = (
+        UniqueConstraint("household_id", "id"),
+        UniqueConstraint("reverses_transaction_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("households.id", ondelete="CASCADE"), index=True, nullable=False
     )
     transaction_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id", ondelete="RESTRICT"), index=True
+    )
     status: Mapped[TransactionStatus] = mapped_column(Enum(TransactionStatus), nullable=False)
     description: Mapped[str] = mapped_column(String(240), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reverses_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ledger_transactions.id", ondelete="RESTRICT")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     postings: Mapped[list["Posting"]] = relationship(
@@ -273,7 +442,7 @@ class Posting(Base):
         ForeignKey("financial_accounts.id", ondelete="RESTRICT"), index=True, nullable=False
     )
     amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    currency: Mapped[str] = mapped_column(String(12), nullable=False)
     transaction: Mapped[LedgerTransaction] = relationship(back_populates="postings")
 
 
@@ -286,7 +455,16 @@ class HouseholdInboxAddress(Base):
     """
 
     __tablename__ = "household_inbox_addresses"
-    __table_args__ = (UniqueConstraint("local_part"),)
+    __table_args__ = (
+        UniqueConstraint("local_part"),
+        Index(
+            "uq_household_inbox_active",
+            "household_id",
+            unique=True,
+            postgresql_where=text("state <> 'DISABLED'"),
+            sqlite_where=text("state <> 'DISABLED'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     household_id: Mapped[uuid.UUID] = mapped_column(
@@ -349,6 +527,9 @@ class TransactionCandidate(Base):
     proposed_currency: Mapped[str] = mapped_column(String(3), default="IDR", nullable=False)
     proposed_description: Mapped[str | None] = mapped_column(String(240))
     proposed_occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    proposed_type: Mapped[str | None] = mapped_column(String(16))
+    proposed_category_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    proposed_destination_account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     ledger_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("ledger_transactions.id", ondelete="RESTRICT")
     )

@@ -13,13 +13,15 @@ import html
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
-PARSER_VERSION = "rumpun-id-1"
+PARSER_VERSION = "rumpun-id-2"
 
 # Amounts in Indonesian bank mail: "Rp 286.500", "IDR 1.250.000,00", "Rp286500".
 _AMOUNT = re.compile(
-    r"(?:rp|idr)\s*\.?\s*([0-9][0-9.\s]{0,18}[0-9]|[0-9])(?:,(\d{1,2}))?",
+    r"(?:rp|idr)\s*\.?\s*"
+    r"(?P<integer>[0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]+)"
+    r"(?P<fraction>[.,][0-9]{1,2})?(?![0-9]|[.,][0-9])",
     re.IGNORECASE,
 )
 
@@ -48,6 +50,15 @@ _EXPENSE_WORDS = (
     "transfer keluar",
     "berhasil dibayar",
     "pembayaran berhasil",
+    "payment",
+    "spent",
+    "charged",
+    "debit card",
+)
+_TRANSFER_WORDS = (
+    "money arrived in your shared pocket",
+    "you have made a transfer",
+    " is adding ",
 )
 
 # Senders Rumpun recognises, mapped to the name shown on the candidate. An
@@ -70,9 +81,22 @@ _KNOWN_SENDERS = {
 }
 
 _MONTHS = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "mei": 5, "may": 5, "jun": 6,
-    "jul": 7, "agu": 8, "aug": 8, "sep": 9, "okt": 10, "oct": 10, "nov": 11,
-    "des": 12, "dec": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "mei": 5,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "agu": 8,
+    "aug": 8,
+    "sep": 9,
+    "okt": 10,
+    "oct": 10,
+    "nov": 11,
+    "des": 12,
+    "dec": 12,
 }
 
 _DATE_PATTERNS = (
@@ -111,7 +135,11 @@ class ParsedEmail:
 
     @property
     def is_complete(self) -> bool:
-        return self.amount_atomic is not None and self.description is not None
+        return (
+            self.amount_atomic is not None
+            and self.description is not None
+            and self.direction != "transfer"
+        )
 
 
 def strip_html(raw: str) -> str:
@@ -152,7 +180,15 @@ _NOT_THE_AMOUNT = (
 )
 
 # Words that sit next to the figure that IS the transaction.
-_IS_THE_AMOUNT = ("sebesar", "sejumlah", "nominal", "jumlah", "amount", "total bayar")
+_IS_THE_AMOUNT = (
+    "sebesar",
+    "sejumlah",
+    "nominal",
+    "jumlah",
+    "amount",
+    "total bayar",
+    "charged a fee of",
+)
 
 
 def _label_before(text: str, start: int, window: int = 42) -> str:
@@ -168,7 +204,7 @@ def parse_amount(text: str) -> tuple[int | None, str | None]:
     """
     scored: list[tuple[int, int, str]] = []
     for match in _AMOUNT.finditer(text):
-        digits = re.sub(r"[.\s]", "", match.group(1))
+        digits = re.sub(r"[.,]", "", match.group("integer"))
         if not digits.isdigit():
             continue
         value = int(digits)
@@ -199,6 +235,10 @@ def parse_amount(text: str) -> tuple[int | None, str | None]:
 
 def parse_direction(text: str) -> tuple[str, str | None]:
     lowered = text.lower()
+    for word in _TRANSFER_WORDS:
+        index = lowered.find(word)
+        if index != -1:
+            return "transfer", _snippet(text, index, index + len(word))
     for word in _INCOME_WORDS:
         index = lowered.find(word)
         if index != -1:
@@ -218,11 +258,7 @@ def parse_datetime(text: str) -> tuple[datetime | None, str | None]:
         if match is None:
             continue
         day_raw, month_raw, year_raw = match.groups()
-        month = (
-            int(month_raw)
-            if month_raw.isdigit()
-            else _MONTHS.get(month_raw[:3].lower(), 0)
-        )
+        month = int(month_raw) if month_raw.isdigit() else _MONTHS.get(month_raw[:3].lower(), 0)
         if not 1 <= month <= 12:
             continue
         day, year = int(day_raw), int(year_raw)
@@ -235,11 +271,14 @@ def parse_datetime(text: str) -> tuple[datetime | None, str | None]:
             if hour > 23 or minute > 59:
                 hour = minute = 0
         try:
-            # Naive local time from the mail, recorded as UTC. Jakarta has no
-            # daylight saving, so the offset is applied by the caller if it
-            # matters; storing it unshifted keeps the parser honest about what
-            # the email actually said.
-            found = datetime(year, month, day, hour, minute, tzinfo=UTC)
+            zone = UTC
+            if time_match:
+                suffix = text[time_match.end() : time_match.end() + 12]
+                zone_match = re.search(r"\b(WIB|WITA|WIT)\b", suffix, re.IGNORECASE)
+                if zone_match:
+                    offset = {"WIB": 7, "WITA": 8, "WIT": 9}[zone_match.group(1).upper()]
+                    zone = timezone(timedelta(hours=offset))
+            found = datetime(year, month, day, hour, minute, tzinfo=zone).astimezone(UTC)
         except ValueError:
             continue
         return found, _snippet(text, match.start(), match.end())
@@ -251,6 +290,15 @@ def parse_description(text: str, subject: str, issuer: str | None) -> tuple[str,
     cleaned = " ".join(subject.split()).strip()
     # Forwarded mail carries a prefix that says nothing about the purchase.
     cleaned = re.sub(r"^(fwd?|fw|re)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    if issuer == "BCA" and cleaned.lower() == "internet transaction journal":
+        payment = re.search(
+            r"\bPayment to\s*:\s*(.{3,80}?)\s+"
+            r"(?:Merchant Location|Acquirer|Merchant PAN|Terminal ID)\s*:",
+            text,
+            re.IGNORECASE,
+        )
+        if payment:
+            return payment.group(1).strip()[:240], "body"
     if cleaned:
         return cleaned[:240], "subject"
     merchant = re.search(
@@ -308,6 +356,8 @@ def parse_transaction_email(
         result.evidence.append(
             {"field": "direction", "value": direction, "snippet": direction_snippet}
         )
+        if direction == "transfer":
+            result.warnings.append("transfer_needs_account_mapping")
     else:
         result.warnings.append("direction_assumed")
 
@@ -326,9 +376,7 @@ def parse_transaction_email(
 
     description, source = parse_description(text, subject, result.issuer)
     result.description = description
-    result.evidence.append(
-        {"field": "description", "value": description, "snippet": source}
-    )
+    result.evidence.append({"field": "description", "value": description, "snippet": source})
 
     if result.issuer is None:
         result.warnings.append("unknown_sender")

@@ -8,8 +8,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.candidate_rules import settle_state
+from app.candidate_rules import transaction_type as transaction_type_of
 from app.database import get_db
 from app.errors import ApiError
 from app.models import (
@@ -17,6 +19,7 @@ from app.models import (
     AccountKind,
     AuditEvent,
     CandidateState,
+    Category,
     FinancialAccount,
     IdempotencyRecord,
     LedgerTransaction,
@@ -26,8 +29,10 @@ from app.models import (
     TransactionStatus,
     utcnow,
 )
+from app.push import queue_budget_alerts
 from app.schemas import (
     CandidateActionRequest,
+    CandidateConfirmRequest,
     CandidateDetail,
     CandidateEditRequest,
     CandidateList,
@@ -90,10 +95,21 @@ def _proposed(item: TransactionCandidate) -> CandidateProposed:
         currency=item.proposed_currency,
         description=item.proposed_description,
         occurred_at=item.proposed_occurred_at,
+        transaction_type=item.proposed_type
+        or _text(item.source.metadata_json, "direction")
+        or "expense",
+        category_id=item.proposed_category_id,
+        destination_account_id=item.proposed_destination_account_id,
     )
 
 
+def _text(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) else None
+
+
 def _summary(item: TransactionCandidate) -> CandidateSummary:
+    metadata = item.source.metadata_json
     return CandidateSummary(
         id=item.id,
         state=item.state,
@@ -101,7 +117,25 @@ def _summary(item: TransactionCandidate) -> CandidateSummary:
         confidence_bps=item.confidence_bps,
         proposed=_proposed(item),
         created_at=item.created_at,
+        recipient_name=_text(metadata, "recipient_name"),
+        recipient_account=_text(metadata, "recipient_account"),
+        direction=_text(metadata, "direction"),
+        issuer=_text(metadata, "issuer"),
+        suggested_fields=_suggested_fields(item),
     )
+
+
+def _suggested_fields(item: TransactionCandidate) -> list[str]:
+    """Fields still holding Jev's pick; one a person changed is theirs."""
+    suggested = item.source.metadata_json.get("suggested")
+    if not isinstance(suggested, dict):
+        return []
+    current = {
+        "account_id": item.proposed_account_id,
+        "destination_account_id": item.proposed_destination_account_id,
+        "category_id": item.proposed_category_id,
+    }
+    return [field for field, value in suggested.items() if str(current.get(field)) == value]
 
 
 def _detail(item: TransactionCandidate) -> CandidateDetail:
@@ -156,10 +190,14 @@ def list_candidates(
             or_(FinancialAccount.visibility == "household", accessible_restricted_account),
         )
     )
-    query = select(TransactionCandidate).where(
-        TransactionCandidate.household_id == auth.household.id,
-        TransactionCandidate.state.in_([CandidateState.PENDING, CandidateState.NEEDS_INPUT]),
-        or_(TransactionCandidate.proposed_account_id.is_(None), visible_account),
+    query = (
+        select(TransactionCandidate)
+        .options(selectinload(TransactionCandidate.source))
+        .where(
+            TransactionCandidate.household_id == auth.household.id,
+            TransactionCandidate.state.in_([CandidateState.PENDING, CandidateState.NEEDS_INPUT]),
+            or_(TransactionCandidate.proposed_account_id.is_(None), visible_account),
+        )
     )
     if cursor:
         created_at, item_id = _decode_cursor(cursor)
@@ -211,6 +249,9 @@ def edit_candidate(
         raise ApiError(409, "candidate_version_conflict", "Candidate version has changed")
     changes = payload.model_dump(exclude_unset=True, exclude={"version"})
     account_id = changes.pop("account_id", None)
+    transaction_type = changes.pop("transaction_type", None)
+    category_id = changes.pop("category_id", None)
+    destination_account_id = changes.pop("destination_account_id", None)
     if "account_id" in payload.model_fields_set:
         if account_id is not None:
             selected_account = db.scalar(
@@ -235,6 +276,36 @@ def edit_candidate(
             ):
                 raise ApiError(403, "account_access_denied", "Account access is denied")
         item.proposed_account_id = account_id
+    if "transaction_type" in payload.model_fields_set:
+        item.proposed_type = transaction_type
+        if transaction_type == "transfer":
+            item.proposed_category_id = None
+        else:
+            item.proposed_destination_account_id = None
+    if "category_id" in payload.model_fields_set:
+        if category_id is not None:
+            category = db.scalar(
+                select(Category).where(
+                    Category.id == category_id,
+                    Category.household_id == auth.household.id,
+                    Category.category_type == (item.proposed_type or "expense"),
+                )
+            )
+            if category is None:
+                raise ApiError(422, "invalid_category", "Category is invalid")
+        item.proposed_category_id = category_id
+    if "destination_account_id" in payload.model_fields_set:
+        if destination_account_id is not None:
+            destination = db.scalar(
+                select(FinancialAccount).where(
+                    FinancialAccount.id == destination_account_id,
+                    FinancialAccount.household_id == auth.household.id,
+                    FinancialAccount.status == "active",
+                )
+            )
+            if destination is None:
+                raise ApiError(422, "invalid_candidate_account", "Destination account is invalid")
+        item.proposed_destination_account_id = destination_account_id
     field_map = {
         "amount_atomic": "proposed_amount_atomic",
         "currency": "proposed_currency",
@@ -243,6 +314,7 @@ def edit_candidate(
     }
     for field, value in changes.items():
         setattr(item, field_map[field], value)
+    settle_state(item)
     item.version += 1
     item.updated_at = utcnow()
     item.reviewed_by_user_id = auth.user.id
@@ -314,7 +386,7 @@ def mark_duplicate(
 @router.post("/{candidate_id}/confirm", response_model=ConfirmedCandidateResponse)
 def confirm_candidate(
     candidate_id: uuid.UUID,
-    payload: CandidateActionRequest,
+    payload: CandidateConfirmRequest,
     auth: Annotated[AuthContext, Depends(get_auth_context)],
     db: Session = Depends(get_db),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
@@ -322,7 +394,9 @@ def confirm_candidate(
     _ensure_reviewer(auth)
     if not idempotency_key or len(idempotency_key) > 255:
         raise ApiError(400, "idempotency_key_required", "A valid Idempotency-Key is required")
-    request_hash = hashlib.sha256(f"{candidate_id}:{payload.version}".encode()).hexdigest()
+    request_hash = hashlib.sha256(
+        f"{candidate_id}:{payload.version}:{payload.account_id}:{payload.category_id}:{payload.destination_account_id}".encode()
+    ).hexdigest()
     operation = "candidate.confirm"
     existing = db.scalar(
         select(IdempotencyRecord).where(
@@ -351,9 +425,14 @@ def confirm_candidate(
         )
     if item.version != payload.version:
         raise ApiError(409, "candidate_version_conflict", "Candidate version has changed")
+    transaction_type = transaction_type_of(item)
+    if transaction_type not in {"expense", "income", "transfer"}:
+        raise ApiError(422, "candidate_type_invalid", "Choose a transaction type")
+    account_id = payload.account_id or item.proposed_account_id
+    if account_id is None:
+        raise ApiError(422, "candidate_account_required", "Choose the account that paid")
     if not all(
         [
-            item.proposed_account_id,
             item.proposed_amount_atomic,
             item.proposed_description,
             item.proposed_occurred_at,
@@ -362,7 +441,7 @@ def confirm_candidate(
         raise ApiError(422, "candidate_incomplete", "Candidate needs all proposed fields")
     account = db.scalar(
         select(FinancialAccount).where(
-            FinancialAccount.id == item.proposed_account_id,
+            FinancialAccount.id == account_id,
             FinancialAccount.household_id == auth.household.id,
             FinancialAccount.status == "active",
         )
@@ -381,22 +460,87 @@ def confirm_candidate(
         is None
     ):
         raise ApiError(403, "account_access_denied", "Account access is denied")
-    counterpart = db.scalar(
-        select(FinancialAccount).where(
-            FinancialAccount.household_id == auth.household.id,
-            FinancialAccount.kind == AccountKind.EQUITY,
-            FinancialAccount.currency == item.proposed_currency,
-            FinancialAccount.status == "active",
-        )
-    )
-    if counterpart is None:
-        raise ApiError(422, "counterpart_account_missing", "A balancing account is required")
-
     assert item.proposed_amount_atomic is not None
     amount = item.proposed_amount_atomic
+    category = None
+    destination = None
+    counterpart: FinancialAccount | None
+    if transaction_type == "transfer":
+        destination_id = payload.destination_account_id or item.proposed_destination_account_id
+        if destination_id is None or destination_id == account.id:
+            raise ApiError(
+                422, "candidate_destination_required", "Choose another destination account"
+            )
+        destination = db.scalar(
+            select(FinancialAccount).where(
+                FinancialAccount.id == destination_id,
+                FinancialAccount.household_id == auth.household.id,
+                FinancialAccount.status == "active",
+                FinancialAccount.currency == account.currency,
+            )
+        )
+        if destination is None:
+            raise ApiError(422, "invalid_candidate_account", "Destination account is invalid")
+        if (
+            destination.visibility == "restricted"
+            and db.scalar(
+                select(AccountAccessGrant.id).where(
+                    AccountAccessGrant.household_id == auth.household.id,
+                    AccountAccessGrant.account_id == destination.id,
+                    AccountAccessGrant.user_id == auth.user.id,
+                )
+            )
+            is None
+        ):
+            raise ApiError(403, "account_access_denied", "Account access is denied")
+        counterpart = destination
+    else:
+        counterpart = db.scalar(
+            select(FinancialAccount).where(
+                FinancialAccount.household_id == auth.household.id,
+                FinancialAccount.kind == AccountKind.EQUITY,
+                FinancialAccount.currency == item.proposed_currency,
+                FinancialAccount.status == "active",
+            )
+        )
+        if counterpart is None:
+            raise ApiError(422, "counterpart_account_missing", "A balancing account is required")
+        selected_category_id = payload.category_id or item.proposed_category_id
+        category_type = transaction_type
+        if selected_category_id is not None:
+            category = db.scalar(
+                select(Category).where(
+                    Category.id == selected_category_id,
+                    Category.household_id == auth.household.id,
+                    Category.category_type == category_type,
+                )
+            )
+            if category is None:
+                raise ApiError(
+                    422, "invalid_category", "Choose a matching category in this household"
+                )
+        else:
+            category = db.scalar(
+                select(Category).where(
+                    Category.household_id == auth.household.id,
+                    Category.category_type == category_type,
+                    Category.name
+                    == ("General expense" if transaction_type == "expense" else "General income"),
+                )
+            ) or db.scalar(
+                select(Category)
+                .where(
+                    Category.household_id == auth.household.id,
+                    Category.category_type == category_type,
+                )
+                .order_by(Category.name)
+            )
+        if category is None:
+            raise ApiError(422, "category_required", "Add a category before confirming")
     transaction = LedgerTransaction(
         household_id=auth.household.id,
-        transaction_type="expense",
+        transaction_type=transaction_type,
+        category_id=category.id if category is not None else None,
         status=TransactionStatus.POSTED,
         description=item.proposed_description or "",
         occurred_at=item.proposed_occurred_at or utcnow(),
@@ -410,18 +554,22 @@ def confirm_candidate(
                 household_id=auth.household.id,
                 transaction_id=transaction.id,
                 account_id=account.id,
-                amount_atomic=-amount,
+                amount_atomic=amount if transaction_type == "income" else -amount,
                 currency=item.proposed_currency,
             ),
             Posting(
                 household_id=auth.household.id,
                 transaction_id=transaction.id,
                 account_id=counterpart.id,
-                amount_atomic=amount,
+                amount_atomic=-amount if transaction_type == "income" else amount,
                 currency=item.proposed_currency,
             ),
         ]
     )
+    item.proposed_account_id = account.id
+    item.proposed_category_id = category.id if category is not None else None
+    item.proposed_destination_account_id = destination.id if destination is not None else None
+    item.proposed_type = transaction_type
     item.state = CandidateState.CONFIRMED
     item.ledger_transaction_id = transaction.id
     item.reviewed_by_user_id = auth.user.id
@@ -446,6 +594,9 @@ def confirm_candidate(
             metadata_json={"candidate_id": str(item.id)},
         )
     )
+    if transaction_type == "expense" and category is not None:
+        db.flush()
+        queue_budget_alerts(db, auth.household, category, transaction.occurred_at)
     try:
         db.commit()
     except IntegrityError as exc:

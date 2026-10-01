@@ -10,7 +10,13 @@ htmlcov/
 
 # Environment
 .env
+src/backend/gmail-oauth.json
+src/backend/gmail-web-oauth.json
+# Firebase client configs carry Google API keys; each machine supplies its own.
+src/frontend/android/app/google-services.json
+src/frontend/ios/Runner/GoogleService-Info.plist
 *.local
+.local/
 
 # Flutter / Dart
 .dart_tool/
@@ -27,5 +33,6 @@ build/
 .DS_Store
 *.swp
 *.png
+!src/frontend/test/golden/*.png
 *.jpg
 .env

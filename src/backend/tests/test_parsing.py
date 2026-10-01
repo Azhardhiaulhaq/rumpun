@@ -8,9 +8,7 @@ from app.parsing import parse_transaction_email
 
 
 def parse(sender: str, subject: str, body: str, is_html: bool = False):
-    return parse_transaction_email(
-        sender=sender, subject=subject, body=body, is_html=is_html
-    )
+    return parse_transaction_email(sender=sender, subject=subject, body=body, is_html=is_html)
 
 
 class TestAmount:
@@ -46,10 +44,33 @@ class TestAmount:
         result = parse("noreply@ovo.id", "Pembayaran", "Pembayaran Rp75.000 berhasil")
         assert result.amount_atomic == 75000
 
+    def test_reads_an_amount_before_sentence_punctuation(self) -> None:
+        result = parse("noreply@jago.com", "Payment", "You paid Rp 48.719.")
+        assert result.amount_atomic == 48719
+
     def test_drops_the_minor_unit_rather_than_inflating(self) -> None:
         # "IDR 1.250.000,00" is 1.250.000 rupiah, not 125.000.000.
         result = parse("noreply@jago.com", "Transaksi", "Nominal IDR 1.250.000,00")
         assert result.amount_atomic == 1250000
+
+    def test_reads_bca_comma_groups_without_truncating_the_amount(self) -> None:
+        result = parse(
+            "BCA <bca@bca.co.id>",
+            "Internet Transaction Journal",
+            "Transaction Type : QRIS Payment Payment to : BP RAFFLES HILLS "
+            "Merchant Location : DEPOK Total Payment : IDR 43,148.00",
+        )
+        assert result.amount_atomic == 43148
+        assert result.description == "BP RAFFLES HILLS"
+        assert result.direction == "expense"
+
+    def test_a_charged_fee_is_the_transaction_itself(self) -> None:
+        result = parse(
+            "Jago <noreply@jago.com>",
+            "You've been charged an insufficient funds fee.",
+            "You have been charged a fee of Rp Rp5.000 because the pocket balance is low.",
+        )
+        assert result.amount_atomic == 5000
 
     def test_no_money_means_no_amount(self) -> None:
         result = parse("news@random.com", "Newsletter", "Nothing financial here.")
@@ -57,6 +78,16 @@ class TestAmount:
 
 
 class TestDirection:
+    def test_shared_pocket_arrival_needs_transfer_account_mapping(self) -> None:
+        result = parse(
+            "Jago <noreply@jago.com>",
+            "Money arrived in your Shared Pocket",
+            "A member is adding Rp10.000 into Transport Pocket.",
+        )
+        assert result.direction == "transfer"
+        assert not result.is_complete
+        assert "transfer_needs_account_mapping" in result.warnings
+
     def test_money_arriving_is_income(self) -> None:
         result = parse("noreply@gopay.co.id", "Top up berhasil", "Dana masuk Rp 150.000")
         assert result.direction == "income"
@@ -94,10 +125,17 @@ class TestHtml:
 
 
 class TestDate:
-    def test_reads_a_numeric_date_and_time(self) -> None:
+    def test_converts_an_explicit_wib_time_to_utc(self) -> None:
         result = parse(
-            "noreply@bca.co.id", "Transaksi", "Pada 19/09/2026 14:23 sebesar Rp 1.000"
+            "noreply@jago.com",
+            "Payment",
+            "Transaction Date 27 September 2026, 16:11 WIB Amount Rp 5.000",
         )
+        assert result.occurred_at is not None
+        assert result.occurred_at.isoformat() == "2026-09-27T09:11:00+00:00"
+
+    def test_reads_a_numeric_date_and_time(self) -> None:
+        result = parse("noreply@bca.co.id", "Transaksi", "Pada 19/09/2026 14:23 sebesar Rp 1.000")
         assert result.occurred_at is not None
         assert (result.occurred_at.day, result.occurred_at.month) == (19, 9)
         assert result.occurred_at.hour == 14
@@ -129,9 +167,7 @@ class TestConfidence:
         assert not result.is_complete
 
     def test_an_unknown_sender_is_flagged_but_still_parsed(self) -> None:
-        result = parse(
-            "alerts@some-new-bank.id", "Transaksi", "Sebesar Rp 42.000 pada 19/09/2026"
-        )
+        result = parse("alerts@some-new-bank.id", "Transaksi", "Sebesar Rp 42.000 pada 19/09/2026")
         assert result.amount_atomic == 42000
         assert "unknown_sender" in result.warnings
         assert result.confidence_bps < 10000
@@ -151,7 +187,5 @@ class TestEvidence:
         assert "286.500" in amount["snippet"]
 
     def test_a_forwarded_subject_loses_its_prefix(self) -> None:
-        result = parse(
-            "noreply@bca.co.id", "Fwd: Notifikasi Transaksi", "Sebesar Rp 1.000"
-        )
+        result = parse("noreply@bca.co.id", "Fwd: Notifikasi Transaksi", "Sebesar Rp 1.000")
         assert result.description == "Notifikasi Transaksi"

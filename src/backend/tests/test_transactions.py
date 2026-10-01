@@ -8,6 +8,7 @@ money appearing or vanishing.
 import hashlib
 import hmac
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -75,10 +76,24 @@ class TestAccounts:
             headers=_auth(token),
         )
         assert created.status_code == 201
-        names = [
-            a["name"] for a in client.get("/api/v1/accounts", headers=_auth(token)).json()
-        ]
+        names = [a["name"] for a in client.get("/api/v1/accounts", headers=_auth(token)).json()]
         assert "Bank utama" in names
+
+    def test_account_creation_retry_returns_one_account(self, client) -> None:
+        token = _household(client, "account-retry@rumpun.app")
+        headers = {**_auth(token), "Idempotency-Key": "account-retry"}
+        body = {"name": "Savings", "kind": "bank", "currency": "CHF"}
+        first = client.post("/api/v1/accounts", json=body, headers=headers)
+        second = client.post("/api/v1/accounts", json=body, headers=headers)
+        assert first.status_code == 201
+        assert second.json()["id"] == first.json()["id"]
+        assert (
+            sum(
+                account["name"] == "Savings"
+                for account in client.get("/api/v1/accounts", headers=_auth(token)).json()
+            )
+            == 1
+        )
 
 
 class TestRecording:
@@ -105,18 +120,49 @@ class TestRecording:
         dashboard = client.get("/api/v1/dashboard", headers=_auth(token)).json()
         assert dashboard["totals_by_currency"]["IDR"] == 4000000
 
-    def test_the_dashboard_reports_a_magnitude_not_a_signed_posting(
-        self, client
-    ) -> None:
+    def test_opening_debt_and_adjustment_keep_their_meaning(self, client) -> None:
+        token = _household(client, "opening@rumpun.app")
+        loan = client.post(
+            "/api/v1/accounts",
+            json={"name": "Home loan", "kind": "loan"},
+            headers=_auth(token),
+        ).json()["id"]
+        opening = _post(
+            client,
+            token,
+            loan,
+            transaction_type="opening_balance",
+            direction="out",
+            amount_atomic=100000000,
+            key="opening-debt",
+        )
+        assert opening.status_code == 201
+        assert opening.json()["direction"] == "out"
+        adjustment = _post(
+            client,
+            token,
+            loan,
+            transaction_type="adjustment",
+            direction="in",
+            amount_atomic=1000000,
+            key="debt-adjustment",
+        )
+        assert adjustment.status_code == 201
+        assert (
+            client.get("/api/v1/dashboard", headers=_auth(token)).json()["totals_by_currency"][
+                "IDR"
+            ]
+            == -99000000
+        )
+
+    def test_the_dashboard_reports_a_magnitude_not_a_signed_posting(self, client) -> None:
         # transaction_type already carries the direction; returning a negative
         # amount as well would let a client negate it twice.
         token = _household(client, "tx3@rumpun.app")
         account = _first_account(client, token)
         _post(client, token, account, amount_atomic=50000, key="k3")
 
-        recent = client.get("/api/v1/dashboard", headers=_auth(token)).json()[
-            "recent_transactions"
-        ]
+        recent = client.get("/api/v1/dashboard", headers=_auth(token)).json()["recent_transactions"]
         assert recent[0]["amount_atomic"] == 50000
         assert recent[0]["transaction_type"] == "expense"
 
@@ -129,6 +175,64 @@ class TestRecording:
         assert first.json()["id"] == second.json()["id"]
         dashboard = client.get("/api/v1/dashboard", headers=_auth(token)).json()
         assert dashboard["totals_by_currency"]["IDR"] == -50000
+
+    def test_transaction_history_pages_without_losing_entries(self, client) -> None:
+        token = _household(client, "history@rumpun.app")
+        account = _first_account(client, token)
+        for index in range(3):
+            response = _post(
+                client,
+                token,
+                account,
+                amount_atomic=1000 + index,
+                description=f"Expense {index}",
+                key=f"history-{index}",
+            )
+            assert response.status_code == 201
+        first = client.get("/api/v1/transactions?limit=2", headers=_auth(token)).json()
+        assert len(first["items"]) == 2
+        assert first["next_cursor"] is not None
+        second = client.get(
+            "/api/v1/transactions",
+            params={"limit": 2, "cursor": first["next_cursor"]},
+            headers=_auth(token),
+        ).json()
+        assert len(second["items"]) == 1
+        assert second["next_cursor"] is None
+        assert len({item["id"] for item in first["items"] + second["items"]}) == 3
+
+    def test_reversal_keeps_history_and_restores_the_balance(self, client) -> None:
+        token = _household(client, "reverse@rumpun.app")
+        account = _first_account(client, token)
+        original = _post(
+            client,
+            token,
+            account,
+            transaction_type="income",
+            amount_atomic=250000,
+            key="original-income",
+        ).json()
+        url = f"/api/v1/transactions/{original['id']}/reverse"
+        headers = {**_auth(token), "Idempotency-Key": "reverse-income"}
+        reversal = client.post(url, json={"reason": "Entered twice"}, headers=headers)
+        assert reversal.status_code == 201
+        assert reversal.json()["reverses_transaction_id"] == original["id"]
+        assert (
+            client.post(url, json={"reason": "Entered twice"}, headers=headers).json()["id"]
+            == reversal.json()["id"]
+        )
+        duplicate = client.post(
+            url,
+            json={"reason": "Again"},
+            headers={**_auth(token), "Idempotency-Key": "reverse-other"},
+        )
+        assert duplicate.status_code == 409
+        dashboard = client.get("/api/v1/dashboard", headers=_auth(token)).json()
+        assert dashboard["totals_by_currency"]["IDR"] == 0
+        trends = client.get("/api/v1/dashboard/trends", headers=_auth(token)).json()
+        assert sum(bucket["received_atomic"] for bucket in trends["buckets"]) == 0
+        history = client.get("/api/v1/transactions", headers=_auth(token)).json()["items"]
+        assert len(history) == 2
 
     def test_the_same_key_with_a_different_body_is_refused(self, client) -> None:
         # Replaying the first result would silently drop the second payment.
@@ -216,11 +320,61 @@ class TestIsolation:
         # Reading is still allowed: a viewer watches the ledger, it just
         # cannot change it.
         assert (
-            client.get(
-                "/api/v1/dashboard", headers=_auth(viewer["access_token"])
-            ).status_code
+            client.get("/api/v1/dashboard", headers=_auth(viewer["access_token"])).status_code
             == 200
         )
+
+    def test_restricted_asset_and_history_are_private(self, client) -> None:
+        owner = _household(client, "private-owner@rumpun.app")
+        account = client.post(
+            "/api/v1/accounts",
+            json={
+                "name": "Private property",
+                "kind": "physical_asset",
+                "visibility": "restricted",
+            },
+            headers=_auth(owner),
+        ).json()["id"]
+        client.post(
+            f"/api/v1/accounts/{account}/valuations",
+            json={"value_atomic": 900000000},
+            headers={**_auth(owner), "Idempotency-Key": "private-value"},
+        )
+        _post(client, owner, account, transaction_type="opening_balance", key="private-open")
+        client.post(
+            "/api/v1/household/invites",
+            json={"email": "private-viewer@rumpun.app", "role": "viewer"},
+            headers=_auth(owner),
+        )
+        viewer = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "private-viewer@rumpun.app",
+                "password": "Sandi-Rumah-2026",
+                "display_name": "Viewer",
+            },
+        ).json()
+        viewer_token = viewer["access_token"]
+        invitation = client.get("/api/v1/onboarding/invites", headers=_auth(viewer_token)).json()[0]
+        client.post(
+            f"/api/v1/onboarding/invites/{invitation['id']}/accept",
+            headers=_auth(viewer_token),
+        )
+
+        assert all(
+            item["id"] != account
+            for item in client.get("/api/v1/accounts", headers=_auth(viewer_token)).json()
+        )
+        assert (
+            client.get(
+                f"/api/v1/accounts/{account}/valuations", headers=_auth(viewer_token)
+            ).status_code
+            == 403
+        )
+        assert client.get("/api/v1/transactions", headers=_auth(viewer_token)).json()["items"] == []
+        dashboard = client.get("/api/v1/dashboard", headers=_auth(viewer_token)).json()
+        assert all(item["account_id"] != account for item in dashboard["accounts"])
+        assert dashboard["recent_transactions"] == []
 
 
 class TestTransfers:
@@ -275,6 +429,133 @@ class TestTransfers:
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "same_account_transfer"
 
+    def test_cross_currency_transfer_uses_the_two_entered_amounts(self, client) -> None:
+        token = _household(client, "fx1@rumpun.app")
+        rupiah = _first_account(client, token)
+        dollars = client.post(
+            "/api/v1/accounts",
+            json={"name": "Dollar wallet", "kind": "foreign_currency", "currency": "USD"},
+            headers=_auth(token),
+        ).json()["id"]
+        response = client.post(
+            "/api/v1/transfers",
+            json={
+                "from_account_id": rupiah,
+                "to_account_id": dollars,
+                "amount_atomic": 1630000,
+                "destination_amount_atomic": 10000,
+                "description": "Buy dollars",
+            },
+            headers={**_auth(token), "Idempotency-Key": "fx-idem"},
+        )
+        assert response.status_code == 201
+        assert response.json()["destination_amount_atomic"] == 10000
+        assert response.json()["destination_currency"] == "USD"
+        replay = client.post(
+            "/api/v1/transfers",
+            json={
+                "from_account_id": rupiah,
+                "to_account_id": dollars,
+                "amount_atomic": 1630000,
+                "destination_amount_atomic": 10000,
+                "description": "Buy dollars",
+            },
+            headers={**_auth(token), "Idempotency-Key": "fx-idem"},
+        )
+        assert replay.json()["id"] == response.json()["id"]
+        balances = client.get("/api/v1/dashboard", headers=_auth(token)).json()[
+            "totals_by_currency"
+        ]
+        assert balances == {"IDR": -1630000, "USD": 10000}
+        history = client.get("/api/v1/transactions", headers=_auth(token)).json()["items"]
+        assert len(history) == 1
+        assert history[0]["destination_minor_unit"] == 2
+
+    def test_cross_currency_transfer_needs_received_amount(self, client) -> None:
+        token = _household(client, "fx2@rumpun.app")
+        dollars = client.post(
+            "/api/v1/accounts",
+            json={"name": "Dollar wallet", "kind": "foreign_currency", "currency": "USD"},
+            headers=_auth(token),
+        ).json()["id"]
+        response = client.post(
+            "/api/v1/transfers",
+            json={
+                "from_account_id": _first_account(client, token),
+                "to_account_id": dollars,
+                "amount_atomic": 1630000,
+                "description": "Buy dollars",
+            },
+            headers={**_auth(token), "Idempotency-Key": "fx-missing"},
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "destination_amount_required"
+
+
+class TestAssets:
+    def test_a_gold_holding_has_exact_quantity_and_valuation_history(self, client) -> None:
+        token = _household(client, "asset1@rumpun.app")
+        account = client.post(
+            "/api/v1/accounts",
+            json={
+                "name": "Gold",
+                "kind": "physical_asset",
+                "currency": "IDR",
+                "unit": "gram",
+            },
+            headers=_auth(token),
+        ).json()
+        assert account["minor_unit"] == 0
+        url = f"/api/v1/accounts/{account['id']}/valuations"
+        first = client.post(
+            url,
+            json={"value_atomic": 1500000, "quantity": "1.2500000000"},
+            headers={**_auth(token), "Idempotency-Key": "gold-1"},
+        )
+        assert first.status_code == 201
+        assert first.json()["quantity"] == "1.2500000000"
+        again = client.post(
+            url,
+            json={"value_atomic": 1700000, "quantity": "1.2500000000"},
+            headers={**_auth(token), "Idempotency-Key": "gold-2"},
+        )
+        assert again.status_code == 201
+        assert len(client.get(url, headers=_auth(token)).json()) == 2
+        replay = client.post(
+            url,
+            json={"value_atomic": 1700000, "quantity": "1.2500000000"},
+            headers={**_auth(token), "Idempotency-Key": "gold-2"},
+        )
+        assert replay.json()["id"] == again.json()["id"]
+        dashboard = client.get("/api/v1/dashboard", headers=_auth(token)).json()
+        gold = next(a for a in dashboard["accounts"] if a["account_id"] == account["id"])
+        assert gold["balance_atomic"] == 1700000
+        assert Decimal(gold["quantity"]) == Decimal("1.25")
+        assert dashboard["totals_by_currency"]["IDR"] == 1700000
+        trends = client.get("/api/v1/dashboard/trends", headers=_auth(token)).json()
+        assert trends["buckets"][-1]["net_worth_atomic"] == 1700000
+
+    def test_currency_precision_must_match_other_accounts(self, client) -> None:
+        token = _household(client, "asset2@rumpun.app")
+        first = client.post(
+            "/api/v1/accounts",
+            json={"name": "Bitcoin", "kind": "investment", "currency": "BTC", "minor_unit": 8},
+            headers=_auth(token),
+        )
+        assert first.status_code == 201
+        second = client.post(
+            "/api/v1/accounts",
+            json={
+                "name": "Other Bitcoin",
+                "kind": "investment",
+                "currency": "BTC",
+                "minor_unit": 2,
+            },
+            headers=_auth(token),
+        )
+        assert second.status_code == 422
+        assert second.json()["error"]["code"] == "currency_unit_mismatch"
+
 
 def _signed(client, secret: str, body: dict) -> object:
     raw = json.dumps(body).encode()
@@ -326,14 +607,10 @@ class TestForwardingInbox:
         )
 
         assert (
-            client.get(
-                "/api/v1/inbox/address", headers=_auth(member["access_token"])
-            ).status_code
+            client.get("/api/v1/inbox/address", headers=_auth(member["access_token"])).status_code
             == 200
         )
-        rotate = client.post(
-            "/api/v1/inbox/address/rotate", headers=_auth(member["access_token"])
-        )
+        rotate = client.post("/api/v1/inbox/address/rotate", headers=_auth(member["access_token"]))
         assert rotate.status_code == 403
 
     def test_an_unsigned_message_is_rejected(self, client, settings) -> None:
@@ -343,9 +620,7 @@ class TestForwardingInbox:
         )
         assert response.status_code == 401
 
-    def test_a_forwarded_bank_email_becomes_a_candidate(
-        self, client, settings
-    ) -> None:
+    def test_a_forwarded_bank_email_becomes_a_candidate(self, client, settings) -> None:
         token = _household(client, "in3@rumpun.app")
         address = client.post("/api/v1/inbox/address", headers=_auth(token)).json()
 
@@ -407,9 +682,7 @@ class TestForwardingInbox:
         assert items[0]["state"] == "needs_input"
         assert items[0]["proposed"]["amount_atomic"] is None
 
-    def test_mail_to_an_unknown_address_reveals_nothing(
-        self, client, settings
-    ) -> None:
+    def test_mail_to_an_unknown_address_reveals_nothing(self, client, settings) -> None:
         result = _signed(
             client,
             settings.inbound_webhook_secret,
@@ -424,9 +697,7 @@ class TestForwardingInbox:
         assert result.status_code == 200
         assert result.json()["status"] == "ignored"
 
-    def test_gmails_confirmation_code_is_captured_for_the_owner(
-        self, client, settings
-    ) -> None:
+    def test_gmails_confirmation_code_is_captured_for_the_owner(self, client, settings) -> None:
         token = _household(client, "in6@rumpun.app")
         address = client.post("/api/v1/inbox/address", headers=_auth(token)).json()
 
@@ -481,9 +752,7 @@ class TestForwardingInbox:
                 "message_id": "end-1",
             },
         )
-        candidate = client.get("/api/v1/candidates", headers=_auth(token)).json()[
-            "items"
-        ][0]
+        candidate = client.get("/api/v1/candidates", headers=_auth(token)).json()["items"][0]
 
         # The parser cannot know which account paid, so a person chooses it.
         client.patch(
@@ -491,9 +760,7 @@ class TestForwardingInbox:
             json={"version": candidate["version"], "account_id": account},
             headers=_auth(token),
         )
-        updated = client.get(
-            f"/api/v1/candidates/{candidate['id']}", headers=_auth(token)
-        ).json()
+        updated = client.get(f"/api/v1/candidates/{candidate['id']}", headers=_auth(token)).json()
         confirmed = client.post(
             f"/api/v1/candidates/{candidate['id']}/confirm",
             json={"version": updated["version"]},

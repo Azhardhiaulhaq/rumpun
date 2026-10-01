@@ -52,16 +52,12 @@ def upgrade() -> None:
         sa.Column("local_part", sa.String(length=64), nullable=False),
         sa.Column("state", _state_type(), nullable=False),
         sa.Column("verification_code", sa.String(length=64), nullable=True),
-        sa.Column(
-            "verification_received_at", sa.DateTime(timezone=True), nullable=True
-        ),
+        sa.Column("verification_received_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_by_user_id", sa.Uuid(), nullable=False),
         sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("message_count", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["household_id"], ["households.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["household_id"], ["households.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
         # The local part is how an inbound message is routed to a household,

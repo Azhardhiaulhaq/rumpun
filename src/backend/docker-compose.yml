@@ -19,17 +19,55 @@ services:
       RUMPUN_DATABASE_URL: postgresql+psycopg://rumpun:local-only-password@db:5432/rumpun
       RUMPUN_JWT_SECRET: local-compose-secret-change-before-deploying
       RUMPUN_GOOGLE_CLIENT_ID: ${RUMPUN_GOOGLE_CLIENT_ID:-}
+      RUMPUN_GMAIL_OAUTH_CLIENT_ID: ${RUMPUN_GMAIL_OAUTH_CLIENT_ID:-}
+      RUMPUN_GMAIL_OAUTH_CLIENT_SECRET: ${RUMPUN_GMAIL_OAUTH_CLIENT_SECRET:-}
+      RUMPUN_GMAIL_OAUTH_REDIRECT_URI: ${RUMPUN_GMAIL_OAUTH_REDIRECT_URI:-}
+      RUMPUN_GMAIL_TOKEN_KEY: ${RUMPUN_GMAIL_TOKEN_KEY:-}
+      RUMPUN_JEV_API_KEY: ${RUMPUN_JEV_API_KEY:-}
+      RUMPUN_FIREBASE_PROJECT_ID: ${RUMPUN_FIREBASE_PROJECT_ID:-rumpun-app}
       # Raise for contract-test runs, which sign up many users in a few seconds.
       RUMPUN_RATE_LIMIT_ATTEMPTS: ${RUMPUN_RATE_LIMIT_ATTEMPTS:-10}
       RUMPUN_INBOUND_EMAIL_DOMAIN: ${RUMPUN_INBOUND_EMAIL_DOMAIN:-invalid.example}
       RUMPUN_INBOUND_WEBHOOK_SECRET: ${RUMPUN_INBOUND_WEBHOOK_SECRET:-}
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log"
     ports:
       # Overridable because another local service may already hold 8000.
       - "${RUMPUN_API_PORT:-8000}:8000"
     volumes:
       - ./app:/app/app
       - ./alembic:/app/alembic
+    depends_on:
+      db:
+        condition: service_healthy
+  gmail-worker:
+    build: .
+    environment:
+      RUMPUN_ENVIRONMENT: development
+      RUMPUN_DATABASE_URL: postgresql+psycopg://rumpun:local-only-password@db:5432/rumpun
+      RUMPUN_JWT_SECRET: local-compose-secret-change-before-deploying
+      RUMPUN_GMAIL_OAUTH_CLIENT_ID: ${RUMPUN_GMAIL_OAUTH_CLIENT_ID:-}
+      RUMPUN_GMAIL_OAUTH_CLIENT_SECRET: ${RUMPUN_GMAIL_OAUTH_CLIENT_SECRET:-}
+      RUMPUN_GMAIL_OAUTH_REDIRECT_URI: ${RUMPUN_GMAIL_OAUTH_REDIRECT_URI:-}
+      RUMPUN_GMAIL_TOKEN_KEY: ${RUMPUN_GMAIL_TOKEN_KEY:-}
+      RUMPUN_JEV_API_KEY: ${RUMPUN_JEV_API_KEY:-}
+    command: sh -c "while true; do python -m app.gmail_sync; sleep 30; done"
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      db:
+        condition: service_healthy
+  push-worker:
+    build: .
+    environment:
+      RUMPUN_ENVIRONMENT: development
+      RUMPUN_DATABASE_URL: postgresql+psycopg://rumpun:local-only-password@db:5432/rumpun
+      RUMPUN_JWT_SECRET: local-compose-secret-change-before-deploying
+      RUMPUN_FIREBASE_PROJECT_ID: ${RUMPUN_FIREBASE_PROJECT_ID:-rumpun-app}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+    command: sh -c "while true; do python -m app.push_worker; sleep 30; done"
+    volumes:
+      - ./app:/app/app
+      - ${RUMPUN_GOOGLE_CREDENTIALS_DIR:-/tmp}:/firebase-credentials:ro
     depends_on:
       db:
         condition: service_healthy

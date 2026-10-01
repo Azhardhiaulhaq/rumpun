@@ -54,9 +54,7 @@ _GMAIL_CONFIRM_SENDERS = ("forwarding-noreply@google.com", "noreply@google.com")
 
 def _require_manager(auth: AuthContext) -> None:
     if auth.membership.role not in MANAGER_ROLES:
-        raise ApiError(
-            403, "inbox_manage_denied", "Only an owner or admin can manage this"
-        )
+        raise ApiError(403, "inbox_manage_denied", "Only an owner or admin can manage this")
 
 
 def _new_local_part() -> str:
@@ -68,9 +66,7 @@ def _new_local_part() -> str:
     return f"rumpun-{secrets.token_hex(6)}"
 
 
-def _as_response(
-    address: HouseholdInboxAddress, settings: Settings
-) -> InboxAddressResponse:
+def _as_response(address: HouseholdInboxAddress, settings: Settings) -> InboxAddressResponse:
     return InboxAddressResponse(
         address=f"{address.local_part}@{settings.inbound_email_domain}",
         state=address.state,
@@ -109,9 +105,7 @@ def create_address(
 ) -> InboxAddressResponse:
     _require_manager(auth)
     if _active_address(db, auth.household.id) is not None:
-        raise ApiError(
-            409, "inbox_address_exists", "This household already has an address"
-        )
+        raise ApiError(409, "inbox_address_exists", "This household already has an address")
     address = HouseholdInboxAddress(
         household_id=auth.household.id,
         local_part=_new_local_part(),
@@ -189,13 +183,9 @@ async def receive_email(
     candidates into any household whose address they knew.
     """
     if not settings.inbound_webhook_secret:
-        raise ApiError(
-            503, "inbound_not_configured", "Inbound email is not configured"
-        )
+        raise ApiError(503, "inbound_not_configured", "Inbound email is not configured")
     raw = await request.body()
-    expected = hmac.new(
-        settings.inbound_webhook_secret.encode(), raw, hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new(settings.inbound_webhook_secret.encode(), raw, hashlib.sha256).hexdigest()
     # Constant-time, so a wrong signature cannot be refined byte by byte.
     if not signature or not hmac.compare_digest(expected, signature):
         raise ApiError(401, "invalid_signature", "Signature check failed")
@@ -229,9 +219,7 @@ async def receive_email(
 
     body = payload.text or payload.html or ""
     is_html = not payload.text and bool(payload.html)
-    content_hash = hashlib.sha256(
-        f"{payload.sender}|{payload.subject}|{body}".encode()
-    ).hexdigest()
+    content_hash = hashlib.sha256(f"{payload.sender}|{payload.subject}|{body}".encode()).hexdigest()
 
     message_id = payload.message_id or content_hash
     existing = db.scalar(

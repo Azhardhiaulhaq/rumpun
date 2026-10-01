@@ -47,9 +47,7 @@ def create_household(
 
 
 class TestSignInWithoutHousehold:
-    def test_a_first_sign_in_leaves_the_user_without_a_household(
-        self, client: TestClient
-    ) -> None:
+    def test_a_first_sign_in_leaves_the_user_without_a_household(self, client: TestClient) -> None:
         body = google_sign_in(client)
 
         assert body["is_new_user"] is True
@@ -135,9 +133,7 @@ class TestInviting:
         owner = self._owner_with_household(client)
         invite = self._invite(client, owner, "siti@example.com").json()
 
-        member = google_sign_in(
-            client, sub="member-1", email="siti@example.com", name="Siti"
-        )
+        member = google_sign_in(client, sub="member-1", email="siti@example.com", name="Siti")
         assert member["household"] is None
         assert len(member["pending_invites"]) == 1
         assert member["pending_invites"][0]["household_name"] == "Keluarga Santoso"
@@ -152,16 +148,12 @@ class TestInviting:
         assert accepted.json()["role"] == MembershipRole.MEMBER
 
         memberships = db.scalars(
-            select(Membership).where(
-                Membership.household_id == uuid.UUID(accepted.json()["id"])
-            )
+            select(Membership).where(Membership.household_id == uuid.UUID(accepted.json()["id"]))
         ).all()
         assert len(memberships) == 2
         assert db.scalar(select(Household).where(Household.name == "Rumah Siti")) is None
 
-    def test_declining_leaves_the_user_free_to_start_their_own(
-        self, client: TestClient
-    ) -> None:
+    def test_declining_leaves_the_user_free_to_start_their_own(self, client: TestClient) -> None:
         owner = self._owner_with_household(client)
         invite = self._invite(client, owner, "siti@example.com").json()
         member = google_sign_in(client, sub="member-1", email="siti@example.com")
@@ -172,16 +164,12 @@ class TestInviting:
         )
         assert declined.status_code == 204
 
-        assert client.get(
-            "/api/v1/onboarding/invites", headers=bearer(member)
-        ).json() == []
+        assert client.get("/api/v1/onboarding/invites", headers=bearer(member)).json() == []
 
         own = create_household(client, member, name="Rumah Siti")
         assert own["role"] == MembershipRole.OWNER
 
-    def test_an_invite_cannot_be_accepted_by_a_different_address(
-        self, client: TestClient
-    ) -> None:
+    def test_an_invite_cannot_be_accepted_by_a_different_address(self, client: TestClient) -> None:
         owner = self._owner_with_household(client)
         invite = self._invite(client, owner, "siti@example.com").json()
         stranger = google_sign_in(client, sub="stranger", email="rina@example.com")
@@ -190,18 +178,14 @@ class TestInviting:
             f"/api/v1/onboarding/invites/{invite['id']}/accept",
             headers=bearer(stranger),
         )
-        assert response.status_code == 404, (
-            "reporting 403 would confirm the invitation exists"
-        )
+        assert response.status_code == 404, "reporting 403 would confirm the invitation exists"
         assert response.json()["error"]["code"] == "invite_not_found"
 
     def test_an_invite_is_matched_case_insensitively(self, client: TestClient) -> None:
         owner = self._owner_with_household(client)
         self._invite(client, owner, "Siti.Rahayu@Example.COM")
 
-        member = google_sign_in(
-            client, sub="member-1", email="siti.rahayu@example.com"
-        )
+        member = google_sign_in(client, sub="member-1", email="siti.rahayu@example.com")
         assert len(member["pending_invites"]) == 1
 
     def test_an_accepted_invite_cannot_be_reused(self, client: TestClient) -> None:
@@ -209,9 +193,7 @@ class TestInviting:
         invite = self._invite(client, owner, "siti@example.com").json()
         member = google_sign_in(client, sub="member-1", email="siti@example.com")
 
-        client.post(
-            f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member)
-        )
+        client.post(f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member))
         again = client.post(
             f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member)
         )
@@ -222,9 +204,7 @@ class TestInviting:
         owner = self._owner_with_household(client)
         invite = self._invite(client, owner, "siti@example.com").json()
 
-        revoked = client.delete(
-            f"/api/v1/household/invites/{invite['id']}", headers=bearer(owner)
-        )
+        revoked = client.delete(f"/api/v1/household/invites/{invite['id']}", headers=bearer(owner))
         assert revoked.status_code == 204
 
         member = google_sign_in(client, sub="member-1", email="siti@example.com")
@@ -248,9 +228,7 @@ class TestInviting:
         owner = self._owner_with_household(client)
         invite = self._invite(client, owner, "siti@example.com").json()
         member = google_sign_in(client, sub="member-1", email="siti@example.com")
-        client.post(
-            f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member)
-        )
+        client.post(f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member))
 
         again = self._invite(client, owner, "siti@example.com")
         assert again.status_code == 409
@@ -273,9 +251,7 @@ class TestInviting:
         owner = self._owner_with_household(client)
         invite = self._invite(client, owner, "siti@example.com").json()
         member = google_sign_in(client, sub="member-1", email="siti@example.com")
-        client.post(
-            f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member)
-        )
+        client.post(f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member))
 
         response = self._invite(client, member, "rina@example.com")
         assert response.status_code == 403
@@ -318,9 +294,7 @@ class TestPeopleList:
             json={"email": "siti@example.com", "role": "member"},
         ).json()
         member = google_sign_in(client, sub="member-1", email="siti@example.com", name="Siti")
-        client.post(
-            f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member)
-        )
+        client.post(f"/api/v1/onboarding/invites/{invite['id']}/accept", headers=bearer(member))
         client.post(
             "/api/v1/household/invites",
             headers=bearer(owner),
@@ -355,7 +329,7 @@ class TestHouseholdSettings:
         ).all()
         assert {account.currency for account in accounts} == {"SGD"}
 
-    def test_an_unsupported_currency_is_rejected_with_the_allowed_list(
+    def test_a_valid_currency_outside_the_old_shortlist_is_accepted(
         self, client: TestClient
     ) -> None:
         owner = google_sign_in(client)
@@ -364,20 +338,23 @@ class TestHouseholdSettings:
         response = client.patch(
             "/api/v1/household",
             headers=bearer(owner),
-            json={"name": "Rumah", "base_currency": "ZZZ"},
+            json={"name": "Rumah", "base_currency": "CHF"},
         )
-        assert response.status_code == 422
-        assert response.json()["error"]["code"] == "unsupported_currency"
-        assert "IDR" in response.json()["error"]["details"]["supported"]
+        assert response.status_code == 200
+        assert response.json()["base_currency"] == "CHF"
 
-    def test_a_viewer_cannot_rename_the_household(
-        self, client: TestClient, db: Session
-    ) -> None:
+        invalid = client.patch(
+            "/api/v1/household",
+            headers=bearer(owner),
+            json={"name": "Rumah", "base_currency": "!2!"},
+        )
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["code"] == "invalid_currency"
+
+    def test_a_viewer_cannot_rename_the_household(self, client: TestClient, db: Session) -> None:
         owner = google_sign_in(client)
         create_household(client, owner)
-        user = db.scalar(
-            select(User).where(User.normalized_email == "ratna@example.com")
-        )
+        user = db.scalar(select(User).where(User.normalized_email == "ratna@example.com"))
         assert user is not None
         membership = db.scalar(select(Membership).where(Membership.user_id == user.id))
         assert membership is not None

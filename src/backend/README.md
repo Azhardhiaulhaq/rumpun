@@ -24,12 +24,12 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 alembic upgrade head
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --no-access-log
 ```
 
 OpenAPI UI is at `http://localhost:8000/api/v1/docs`. The schema is at `/api/v1/openapi.json`.
 
-Docker Compose provides PostgreSQL and the API:
+Docker Compose provides PostgreSQL, the API, and the Gmail and push workers:
 
 ```bash
 cp .env.example .env
@@ -97,6 +97,14 @@ All application endpoints use `/api/v1`.
 - `POST /candidates/{candidate_id}/confirm`
 - `POST /candidates/{candidate_id}/reject`
 - `POST /candidates/{candidate_id}/duplicate`
+- `GET /gmail/connection`
+- `POST /gmail/connect`
+- `GET /gmail/oauth/callback`
+- `DELETE /gmail/connection`
+- `POST /gmail/sync`
+- `GET /gmail/sync/{job_id}`
+- `POST /notifications/devices`
+- `DELETE /notifications/devices`
 
 Authenticated routes accept `Authorization: Bearer <access-token>`. `X-Household-ID` selects an active household, and membership is verified in the same query. If omitted, the earliest membership is selected. Confirmation requires `Idempotency-Key`.
 
@@ -120,10 +128,17 @@ Viewers and children can read the ledger but never write to it.
 
 ## Transaction email
 
-Rumpun does not read anyone's mailbox.
-Reading Gmail needs a restricted OAuth scope, Google app verification, and for production a third-party security assessment, which is a heavy price for a family ledger.
-Instead each household gets an unguessable forwarding address, and the household forwards the mail it wants Rumpun to see.
-The trade is a one-time manual setup in Gmail against no third-party review and a much smaller blast radius.
+Rumpun supports a separate one-tap Gmail grant for each signed-in user and household.
+The automatic Gmail sync discovers new message IDs every 30 minutes, and Jev classifies message content when its API key is configured.
+The worker also processes user-requested lookback syncs about every 30 seconds, skipping email IDs that it has already seen.
+Likely transactions become candidates that a person must confirm before they reach the ledger.
+See `docs/gmail-connect-setup.md` for OAuth, encryption, scheduling, and Google verification requirements.
+The push worker sends new review and monthly budget threshold alerts through FCM.
+See `docs/firebase-android-deployment.md` for its credentials, role, and Android setup.
+
+The older forwarding endpoint remains available for existing setups.
+
+With forwarding, each household gets an unguessable address and forwards only the mail it wants Rumpun to see.
 
 The address is a secret in the same sense a webhook URL is: anyone holding it can create candidates, so it is generated with `secrets.token_hex` and can be rotated without touching anything else.
 Mail to an unknown or retired address is accepted and dropped rather than refused, because a distinct error would confirm which addresses exist.
@@ -151,4 +166,4 @@ Logs contain request ID, method, route path, status, duration, and lifecycle eve
 
 Candidate confirmation uses database uniqueness for both the candidate-to-ledger link and `(household_id, operation, idempotency key)`. PostgreSQL transaction isolation and uniqueness are the production concurrency boundary. The application creates one negative account posting and one positive household-equity posting in the same currency, then commits the candidate state, transaction, postings, audit event, and idempotency result atomically.
 
-This slice does not include email sync, Gmail mailbox OAuth, invitations, manual financial creation, restricted-account grants, budgets, assets, or corrections. It implements the requested registration, sign-in, dashboard, and candidate review surface only.
+The Gmail consent, sync, and candidate path is implemented, but public Google verification and deployed credentials are still required before other users can connect.

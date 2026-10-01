@@ -6,15 +6,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.currency import default_minor_unit, normalize_currency
 from app.database import get_db
 from app.errors import ApiError
 from app.models import (
+    AccountKind,
     AuditEvent,
     FinancialAccount,
     HouseholdInvite,
     InviteState,
     Membership,
     MembershipRole,
+    Posting,
     User,
     utcnow,
 )
@@ -30,10 +33,6 @@ from app.schemas import (
 from app.security import AuthContext, get_auth_context, normalize_email
 
 router = APIRouter(prefix="/household", tags=["household"])
-
-# Currencies the ledger can post in today. Rejecting anything else here keeps a
-# typo from creating accounts the dashboard cannot total.
-SUPPORTED_CURRENCIES = frozenset({"IDR", "MYR", "SGD", "USD", "EUR", "AUD", "JPY", "GBP"})
 
 
 @router.get("", response_model=HouseholdContext)
@@ -60,14 +59,7 @@ def update_household(
             403, "household_edit_denied", "Only an owner or admin can edit this household"
         )
 
-    currency = payload.base_currency.upper()
-    if currency not in SUPPORTED_CURRENCIES:
-        raise ApiError(
-            422,
-            "unsupported_currency",
-            f"Currency {currency} is not supported yet",
-            {"supported": sorted(SUPPORTED_CURRENCIES)},
-        )
+    currency = normalize_currency(payload.base_currency)
 
     household = auth.household
     previous_currency = household.base_currency
@@ -80,10 +72,22 @@ def update_household(
     # follow, otherwise the dashboard would total mixed currencies.
     if currency != previous_currency:
         household.base_currency = currency
-        db.query(FinancialAccount).filter(
-            FinancialAccount.household_id == household.id,
-            FinancialAccount.currency == previous_currency,
-        ).update({FinancialAccount.currency: currency}, synchronize_session=False)
+        accounts = db.scalars(
+            select(FinancialAccount).where(
+                FinancialAccount.household_id == household.id,
+            )
+        ).all()
+        untouched_defaults = (
+            len(accounts) == 2
+            and {(a.name, a.kind) for a in accounts}
+            == {("Cash", AccountKind.CASH), ("Household equity", AccountKind.EQUITY)}
+            and db.scalar(select(Posting.id).where(Posting.household_id == household.id).limit(1))
+            is None
+        )
+        if untouched_defaults:
+            for account in accounts:
+                account.currency = currency
+                account.minor_unit = default_minor_unit(currency)
 
     db.add(
         AuditEvent(
@@ -108,9 +112,7 @@ def update_household(
 
 def _require_manager(auth: AuthContext) -> None:
     if auth.membership.role not in {MembershipRole.OWNER, MembershipRole.ADMIN}:
-        raise ApiError(
-            403, "household_edit_denied", "Only an owner or admin can manage members"
-        )
+        raise ApiError(403, "household_edit_denied", "Only an owner or admin can manage members")
 
 
 @router.get("/people", response_model=HouseholdPeople)

@@ -51,9 +51,7 @@ from app.security import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-def _first_context(
-    db: Session, user_id: uuid.UUID
-) -> tuple[Membership, Household] | None:
+def _first_context(db: Session, user_id: uuid.UUID) -> tuple[Membership, Household] | None:
     """The user's default household, or None while they have not joined one."""
     row = db.execute(
         select(Membership, Household)
@@ -122,9 +120,7 @@ def _token_response(
         is_new_user=is_new_user,
         # Only offered while the user has nowhere to land; a member who already
         # belongs somewhere reviews invites from inside the app instead.
-        pending_invites=(
-            pending_invites_for(db, user.email) if household_context is None else []
-        ),
+        pending_invites=(pending_invites_for(db, user.email) if household_context is None else []),
     )
 
 
@@ -184,9 +180,7 @@ def register(
         # without a name leaves the user in onboarding, where they can accept a
         # pending invitation instead of starting a household they do not want.
         household = (
-            _create_household(db, user, payload.household_name)
-            if payload.household_name
-            else None
+            _create_household(db, user, payload.household_name) if payload.household_name else None
         )
         db.add(
             AuditEvent(

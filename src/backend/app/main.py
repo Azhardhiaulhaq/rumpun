@@ -18,9 +18,12 @@ from app.errors import ApiError
 from app.routers import (
     auth,
     candidates,
+    categories,
     dashboard,
+    gmail,
     household,
     inbox,
+    notifications,
     onboarding,
     transactions,
 )
@@ -135,7 +138,10 @@ def health() -> dict[str, str]:
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(onboarding.router, prefix="/api/v1")
 app.include_router(household.router, prefix="/api/v1")
+app.include_router(categories.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(candidates.router, prefix="/api/v1")
 app.include_router(transactions.router, prefix="/api/v1")
 app.include_router(inbox.router, prefix="/api/v1")
+app.include_router(gmail.router, prefix="/api/v1")
+app.include_router(notifications.router, prefix="/api/v1")
