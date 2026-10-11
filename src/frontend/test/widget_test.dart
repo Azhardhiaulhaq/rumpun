@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rumpun_frontend/api/auth_repository.dart';
 import 'package:rumpun_frontend/gmail_connect_screen.dart';
@@ -20,6 +21,27 @@ void phone(WidgetTester tester, {Size size = const Size(390, 844)}) {
 Future<void> start(WidgetTester tester, {AuthRepository? auth}) async {
   await tester.pumpWidget(RumpunApp(auth: auth ?? fakeRepository()));
   await tester.pumpAndSettle();
+  if (find.text('Keuangan').evaluate().isNotEmpty) {
+    final navigator = Navigator.of(tester.element(find.byType(AppShell)));
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          body: HomeScreen(auth: auth!),
+          bottomNavigationBar: TextButton(
+            onPressed: () {
+              navigator.push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(body: ReviewScreen(auth: auth)),
+                ),
+              );
+            },
+            child: const Text('Tinjau'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
 }
 
 Future<void> tapGoogle(WidgetTester tester) async {
@@ -30,6 +52,15 @@ Future<void> tapGoogle(WidgetTester tester) async {
 
 Future<void> openHome(WidgetTester tester) async {
   await start(tester, auth: fakeRepository(withStoredToken: true));
+}
+
+Future<void> choosePayingAccount(WidgetTester tester) async {
+  final picker = find.byType(DropdownButtonFormField<String>).last;
+  await tester.ensureVisible(picker);
+  await tester.tap(picker);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Tunai · IDR').last);
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -62,7 +93,7 @@ void main() {
       expect(fake.google.initialized, isTrue);
       expect(fake.google.authenticateCalls, 1);
       expect(find.text('Total aset keluarga'), findsOneWidget);
-      expect(find.text('Halo, $signedInName'), findsOneWidget);
+      expect(find.text('Rumah kita'), findsOneWidget);
     });
 
     testWidgets('a first-time member is asked to name the household', (
@@ -225,6 +256,18 @@ void main() {
 
     testWidgets('signing out clears the session and Google', (tester) async {
       phone(tester);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('rumpun/location'),
+            (_) async => null,
+          );
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              const MethodChannel('rumpun/location'),
+              null,
+            ),
+      );
       final fake = fakeAuth();
       await start(tester, auth: fake.repository);
       await tapGoogle(tester);
@@ -401,6 +444,8 @@ void main() {
 
       await tester.enterText(find.byType(TextFormField).at(0), '286500');
       await tester.enterText(find.byType(TextFormField).at(1), 'Belanja rumah');
+      await choosePayingAccount(tester);
+      await tester.ensureVisible(find.text('Simpan catatan'));
       await tester.tap(find.text('Simpan catatan'));
       await tester.pumpAndSettle();
 
@@ -451,6 +496,8 @@ void main() {
       await tester.pump();
       await tester.enterText(find.byType(TextFormField).at(0), '4000000');
       await tester.enterText(find.byType(TextFormField).at(1), 'Gaji');
+      await choosePayingAccount(tester);
+      await tester.ensureVisible(find.text('Simpan catatan'));
       await tester.tap(find.text('Simpan catatan'));
       await tester.pumpAndSettle();
 
@@ -488,6 +535,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextFormField).at(0), '50000');
       await tester.enterText(find.byType(TextFormField).at(1), 'Kopi');
+      await choosePayingAccount(tester);
+      await tester.ensureVisible(find.text('Simpan catatan'));
       await tester.tap(find.text('Simpan catatan'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Simpan catatan'));
@@ -516,6 +565,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextFormField).at(0), '1000');
       await tester.enterText(find.byType(TextFormField).at(1), 'Uji');
+      await choosePayingAccount(tester);
+      await tester.ensureVisible(find.text('Simpan catatan'));
       await tester.tap(find.text('Simpan catatan'));
       await tester.pumpAndSettle();
 
@@ -1140,6 +1191,8 @@ void main() {
     await openHome(tester);
     expect(tester.takeException(), isNull);
 
+    await tester.ensureVisible(find.text('Tinjau'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Tinjau'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

@@ -26,6 +26,26 @@ class ApiClient {
 
   static const _timeout = Duration(seconds: 20);
 
+  String get _pushPlatform => switch (defaultTargetPlatform) {
+    TargetPlatform.iOS => 'ios',
+    TargetPlatform.android => 'android',
+    _ => throw UnsupportedError('Push registration requires iOS or Android.'),
+  };
+
+  Future<Object?> locationRequest(
+    String method,
+    String path,
+    String accessToken, {
+    Map<String, dynamic>? body,
+  }) => _raw(method, '/location$path', body, accessToken: accessToken);
+
+  Future<Object?> listsRequest(
+    String method,
+    String path,
+    String accessToken, {
+    Map<String, dynamic>? body,
+  }) => _raw(method, '/lists$path', body, accessToken: accessToken);
+
   Future<Map<String, dynamic>> post(
     String path,
     Map<String, dynamic> body, {
@@ -556,14 +576,14 @@ class ApiClient {
   Future<void> registerPushDevice(String accessToken, String token) async {
     await _send('POST', '/notifications/devices', {
       'token': token,
-      'platform': 'android',
+      'platform': _pushPlatform,
     }, accessToken: accessToken);
   }
 
   Future<void> unregisterPushDevice(String accessToken, String token) async {
     await _send('DELETE', '/notifications/devices', {
       'token': token,
-      'platform': 'android',
+      'platform': _pushPlatform,
     }, accessToken: accessToken);
   }
 

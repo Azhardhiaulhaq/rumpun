@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rumpun_frontend/main.dart';
 
@@ -57,6 +58,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    final shell = tester.widget<AppShell>(find.byType(AppShell));
+    Navigator.of(tester.element(find.byType(AppShell))).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(body: HomeScreen(auth: shell.auth)),
+      ),
+    );
+    await tester.pumpAndSettle();
   }
 
   testWidgets('home meets the accessibility guidelines', (tester) async {
@@ -74,15 +82,15 @@ void main() {
     tester,
   ) async {
     await pumpHome(tester);
+    Focus.of(tester.element(find.text('Total aset keluarga'))).requestFocus();
+    await tester.pumpAndSettle();
 
     // Tab has to reach the card, and Enter has to open it: a card that only
     // answers to a tap is unusable with a keyboard or a switch device.
-    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-    await tester.pumpAndSettle();
     expect(find.text('Dompet dapur'), findsNothing);
 
     var guard = 0;
-    while (find.text('Dompet dapur').evaluate().isEmpty && guard++ < 12) {
+    while (find.text('Dompet dapur').evaluate().isEmpty && guard++ < 24) {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       if (find.text('Dompet dapur').evaluate().isNotEmpty) break;

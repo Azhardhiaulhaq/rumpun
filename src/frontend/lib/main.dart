@@ -13,6 +13,10 @@ import 'ledger_screen.dart';
 import 'category_screen.dart';
 import 'gmail_connect_screen.dart';
 import 'push_notifications.dart';
+import 'household_home.dart';
+import 'lists/lists_screen.dart';
+import 'tunas/tunas.dart';
+import 'location/location_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -88,8 +92,31 @@ String describeAuthError(Object error) {
         return 'Kategori itu tidak cocok untuk pengeluaran.';
       case 'category_required':
         return 'Tambahkan kategori pengeluaran dulu.';
+      case 'list_read_only':
+        return 'Peranmu hanya bisa melihat daftar, belum bisa mengubahnya.';
+      case 'list_not_found':
+        return 'Daftar ini sudah dihapus.';
+      case 'list_item_not_found':
+        return 'Barang ini sudah dihapus.';
+      case 'list_conflict':
+        return 'Catatan ini baru diubah anggota lain. Muat ulang dulu.';
+      case 'list_limit':
+        return 'Sudah ada 100 daftar. Hapus yang lama dulu.';
+      case 'list_item_limit':
+        return 'Daftar ini sudah penuh. Hapus barang yang sudah dibeli dulu.';
       default:
         return error.message;
+    }
+  }
+  if (error is PlatformException) {
+    if (error.code == 'channel-error') {
+      return 'Koneksi plugin Google di iPhone gagal. Tutup lalu buka kembali aplikasi.';
+    }
+    if (error.code == 'sign_in_failed' || error.code == 'google_sign_in') {
+      return 'Masuk dengan Google gagal. Coba lagi.';
+    }
+    if (error.code == 'write_failed' || error.code == 'read_failed') {
+      return 'Sesi tidak dapat disimpan di iPhone. Coba masuk lagi.';
     }
   }
   if (error is NetworkException) return error.message;
@@ -155,6 +182,16 @@ class _RumpunAppState extends State<RumpunApp> {
     if (widget.pushEnabled) {
       _push = PushNotifications(
         widget.auth,
+        onLocation: () {
+          if (widget.auth.isSignedIn) {
+            _navigatorKey.currentState?.pushNamed('/location');
+          }
+        },
+        onList: (listId) {
+          if (widget.auth.isSignedIn) {
+            _navigatorKey.currentState?.pushNamed('/lists', arguments: listId);
+          }
+        },
         onReview: () {
           if (widget.auth.isSignedIn) {
             _navigatorKey.currentState?.pushNamed('/review');
@@ -171,7 +208,19 @@ class _RumpunAppState extends State<RumpunApp> {
               action: SnackBarAction(
                 label: 'Lihat',
                 onPressed: () {
-                  _navigatorKey.currentState?.pushNamed('/review');
+                  final kind = message.data['kind'];
+                  final navigator = _navigatorKey.currentState;
+                  if (kind == 'list_items') {
+                    navigator?.pushNamed(
+                      '/lists',
+                      arguments: message.data['list_id'],
+                    );
+                  } else if (kind == 'location_started' ||
+                      kind == 'location_arrival') {
+                    navigator?.pushNamed('/location');
+                  } else {
+                    navigator?.pushNamed('/review');
+                  }
                 },
               ),
             ),
@@ -232,8 +281,8 @@ class _RumpunAppState extends State<RumpunApp> {
   Widget build(BuildContext context) {
     const forest = Color(0xFF234B38);
     const ink = Color(0xFF20251F);
-    const paper = Color(0xFFF7F1E7);
-    const cream = Color(0xFFFFFBF4);
+    const paper = Color(0xFFF5F7F5);
+    const cream = Colors.white;
     const clay = Color(0xFFA44B2B);
 
     final scheme = ColorScheme.fromSeed(
@@ -261,21 +310,21 @@ class _RumpunAppState extends State<RumpunApp> {
         fontFamily: 'NotoSans',
         textTheme: const TextTheme(
           displayLarge: TextStyle(
-            fontFamily: 'NotoSerif',
+            fontFamily: 'NotoSans',
             fontWeight: FontWeight.w700,
             fontSize: 48,
             height: 1.03,
             letterSpacing: -1.2,
           ),
           headlineLarge: TextStyle(
-            fontFamily: 'NotoSerif',
+            fontFamily: 'NotoSans',
             fontWeight: FontWeight.w700,
             fontSize: 34,
             height: 1.12,
             letterSpacing: -0.5,
           ),
           headlineMedium: TextStyle(
-            fontFamily: 'NotoSerif',
+            fontFamily: 'NotoSans',
             fontWeight: FontWeight.w700,
             fontSize: 26,
             height: 1.2,
@@ -369,7 +418,13 @@ class _RumpunAppState extends State<RumpunApp> {
         '/setup': (_) => HouseholdSetupScreen(auth: widget.auth),
         '/home': (_) => AppShell(auth: widget.auth),
         '/gmail': (_) => GmailConnectScreen(auth: widget.auth),
+        '/location': (_) => AppShell(auth: widget.auth, initialIndex: 2),
         '/review': (_) => AppShell(auth: widget.auth, initialIndex: 1),
+        '/lists': (context) => AppShell(
+          auth: widget.auth,
+          initialIndex: 3,
+          openListId: ModalRoute.of(context)?.settings.arguments as String?,
+        ),
       },
     );
   }
@@ -406,8 +461,8 @@ class AppColors {
   static const forest = Color(0xFF234B38);
   static const moss = Color(0xFF6F8265);
   static const clay = Color(0xFFA44B2B);
-  static const paper = Color(0xFFF7F1E7);
-  static const cream = Color(0xFFFFFBF4);
+  static const paper = Color(0xFFF5F7F5);
+  static const cream = Color(0xFFFFFFFF);
   static const ink = Color(0xFF20251F);
   static const mutedInk = Color(0xFF4F5B52);
   static const line = Color(0xFF70736B);
@@ -561,6 +616,12 @@ class _SplashScreenState extends State<SplashScreen>
                 )
               else
                 const _SplashWordmark(),
+              const SizedBox(height: 28),
+              // Tunas pops up once to greet, then rests.
+              FadeTransition(
+                opacity: animate ? _wordFade : const AlwaysStoppedAnimation(1),
+                child: const Tunas(size: 84, mood: TunasMood.hop),
+              ),
             ],
           ),
         ),
@@ -667,7 +728,15 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-      final message = describeAuthError(error);
+      debugPrint('Google sign-in failure type: ${error.runtimeType}');
+      if (error is PlatformException) {
+        debugPrint(
+          'Google sign-in platform error: ${error.code}: ${error.message}',
+        );
+      }
+      final message = error is PlatformException
+          ? 'Masuk gagal (${error.code}): ${error.message ?? 'Plugin iPhone tidak merespons.'}'
+          : describeAuthError(error);
       setState(() {
         _loading = false;
         _error = message.isEmpty ? null : message;
@@ -1287,10 +1356,18 @@ class AuthScaffold extends StatelessWidget {
 }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.auth, this.initialIndex = 0});
+  const AppShell({
+    super.key,
+    required this.auth,
+    this.initialIndex = 0,
+    this.openListId,
+  });
 
   final AuthRepository auth;
   final int initialIndex;
+
+  /// A list to open straight away, from a list notification.
+  final String? openListId;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -1298,21 +1375,64 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   late int _index = widget.initialIndex;
+  // Kept alive after the first visit so scroll position survives tab changes.
+  late bool _listsOpened = widget.initialIndex == 3;
+  final _financeKey = GlobalKey<FinanceScreenState>();
+
+  void _openFinance(int destination) {
+    setState(() => _index = 1);
+    _financeKey.currentState?.select(destination);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.surface,
-      body: IndexedStack(
-        index: _index,
-        children: [
-          HomeScreen(auth: widget.auth),
-          ReviewScreen(auth: widget.auth),
-        ],
-      ),
-      bottomNavigationBar: RumpunNavBar(
-        index: _index,
-        onSelect: (value) => setState(() => _index = value),
+    return PopScope(
+      canPop: _index == 0,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          if (_index != 1 ||
+              !(_financeKey.currentState?.backToOverview() ?? false)) {
+            setState(() => _index = 0);
+          }
+        }
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.surface,
+        body: IndexedStack(
+          index: _index,
+          children: [
+            HouseholdHome(
+              auth: widget.auth,
+              onFinance: _openFinance,
+              onProfile: () => _showProfileSheet(context, widget.auth),
+              onRecord: () => _showRecordChoice(context, widget.auth),
+              onLists: () => setState(() {
+                _index = 3;
+                _listsOpened = true;
+              }),
+            ),
+            FinanceScreen(
+              key: _financeKey,
+              auth: widget.auth,
+              initialDestination: widget.initialIndex == 1 ? 2 : 0,
+            ),
+            if (_index == 2)
+              LocationScreen(auth: widget.auth)
+            else
+              const SizedBox.shrink(),
+            if (_index == 3 || _listsOpened)
+              ListsScreen(auth: widget.auth, openListId: widget.openListId)
+            else
+              const SizedBox.shrink(),
+          ],
+        ),
+        bottomNavigationBar: RumpunNavBar(
+          index: _index,
+          onSelect: (value) => setState(() {
+            _index = value;
+            if (value == 3) _listsOpened = true;
+          }),
+        ),
       ),
     );
   }
@@ -1322,7 +1442,7 @@ class _AppShellState extends State<AppShell> {
 ///
 /// On a dark bar the stock component fights back: its indicator pill is sized
 /// for a light surface, its ripple washes the forest out, and the label sits
-/// too far from the icon to read as one target. This draws the two
+/// too far from the icon to read as one target. This draws the
 /// destinations directly, so the active state is a single deliberate shape.
 class RumpunNavBar extends StatelessWidget {
   const RumpunNavBar({super.key, required this.index, required this.onSelect});
@@ -1333,9 +1453,19 @@ class RumpunNavBar extends StatelessWidget {
   static const _items = [
     (icon: Icons.home_outlined, activeIcon: Icons.home, label: 'Beranda'),
     (
-      icon: Icons.fact_check_outlined,
-      activeIcon: Icons.fact_check,
-      label: 'Tinjau',
+      icon: Icons.account_balance_wallet_outlined,
+      activeIcon: Icons.account_balance_wallet,
+      label: 'Keuangan',
+    ),
+    (
+      icon: Icons.location_on_outlined,
+      activeIcon: Icons.location_on,
+      label: 'Lokasi',
+    ),
+    (
+      icon: Icons.checklist_outlined,
+      activeIcon: Icons.checklist,
+      label: 'Daftar',
     ),
   ];
 
@@ -1343,26 +1473,29 @@ class RumpunNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: AppColors.forest,
-        // A hairline of deeper forest instead of a shadow: the bar is anchored
-        // to the bottom of the screen, so it needs a boundary, not elevation.
-        border: Border(top: BorderSide(color: Color(0xFF16311F))),
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.hairline)),
       ),
       child: SafeArea(
         top: false,
-        child: SizedBox(
-          height: 62,
-          child: Row(
-            children: [
-              for (var i = 0; i < _items.length; i++)
-                Expanded(
-                  child: _NavItem(
-                    item: _items[i],
-                    selected: i == index,
-                    onTap: () => onSelect(i),
+        // The bar keeps a fixed height, so labels stop growing at 1.3x; the
+        // icons and selection rule still identify each destination.
+        child: MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.3,
+          child: SizedBox(
+            height: 62,
+            child: Row(
+              children: [
+                for (var i = 0; i < _items.length; i++)
+                  Expanded(
+                    child: _NavItem(
+                      item: _items[i],
+                      selected: i == index,
+                      onTap: () => onSelect(i),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1386,7 +1519,7 @@ class _NavItem extends StatelessWidget {
     // Forest is already dark, so no darker shade reaches 3:1 against it. The
     // state is carried by the filled icon and the brightness of the label,
     // which both survive without colour vision.
-    final colour = selected ? Colors.white : AppColors.navIdle;
+    final colour = selected ? AppColors.forest : AppColors.mutedInk;
 
     return Semantics(
       button: true,
@@ -1409,6 +1542,9 @@ class _NavItem extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               item.label,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.fade,
               style: TextStyle(
                 fontSize: 11.5,
                 height: 1,
@@ -1420,12 +1556,14 @@ class _NavItem extends StatelessWidget {
             // The marker sits under the label as a short rule. A pill behind
             // the icon reads as a button on a dark bar; a rule reads as a tab.
             AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 160),
               curve: Curves.easeOut,
               height: 2.5,
               width: selected ? 22 : 0,
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.forest,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -1437,9 +1575,14 @@ class _NavItem extends StatelessWidget {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.auth});
+  const HomeScreen({
+    super.key,
+    required this.auth,
+    this.financeOverview = false,
+  });
 
   final AuthRepository auth;
+  final bool financeOverview;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -1526,66 +1669,67 @@ class _HomeScreenState extends State<HomeScreen> {
       bottom: false,
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 14, 12, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Household and display names come from user input and
-                      // can be long, so both clip instead of pushing the
-                      // avatar off a narrow screen.
-                      Text(
-                        _household?.name ?? '',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.quietInk,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+          if (!widget.financeOverview)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 14, 12, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Household and display names come from user input and
+                        // can be long, so both clip instead of pushing the
+                        // avatar off a narrow screen.
+                        Text(
+                          'Ringkasan',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.mutedInk,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        'Halo, ${_user?.displayName ?? 'keluarga'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
+                        const SizedBox(height: 1),
+                        Text(
+                          'Keuangan',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Tooltip(
-                  message: 'Buka profil',
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(24),
-                    onTap: () => _showProfileSheet(context, widget.auth),
-                    child: Container(
-                      // 48, not 44: Android's guideline is the stricter of the
-                      // two platforms and this is the same circle on both.
-                      width: 48,
-                      height: 48,
-                      alignment: Alignment.center,
-                      decoration: const BoxDecoration(
-                        color: AppColors.paleMoss,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(
-                        _initial,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                          color: AppColors.forest,
+                  Tooltip(
+                    message: 'Buka profil',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(24),
+                      onTap: () => _showProfileSheet(context, widget.auth),
+                      child: Container(
+                        // 48, not 44: Android's guideline is the stricter of the
+                        // two platforms and this is the same circle on both.
+                        width: 48,
+                        height: 48,
+                        alignment: Alignment.center,
+                        decoration: const BoxDecoration(
+                          color: AppColors.paleMoss,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          _initial,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                            color: AppColors.forest,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
           Expanded(
             child: FutureBuilder<Dashboard>(
               future: _future,
@@ -1625,55 +1769,117 @@ class _HomeScreenState extends State<HomeScreen> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(20, 6, 20, 30),
         children: [
-          AssetsCarousel(
-            dashboard: data,
-            visible: _balanceVisible,
-            onToggle: () => setState(() => _balanceVisible = !_balanceVisible),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: QuickAction(
-                  icon: Icons.add,
-                  label: 'Catat uang',
-                  filled: true,
-                  onTap: () async {
-                    if (await _showAddTransaction(context, widget.auth)) {
+          if (widget.financeOverview)
+            FinanceBalanceCard(
+              dashboard: data,
+              visible: _balanceVisible,
+              onToggle: () =>
+                  setState(() => _balanceVisible = !_balanceVisible),
+            )
+          else
+            AssetsCarousel(
+              dashboard: data,
+              visible: _balanceVisible,
+              onToggle: () =>
+                  setState(() => _balanceVisible = !_balanceVisible),
+            ),
+          if (widget.financeOverview && _spending != null)
+            FutureBuilder<MonthlySpending>(
+              future: _spending,
+              builder: (context, snapshot) {
+                final spending = snapshot.data;
+                if (spending == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: BudgetMoodCard(
+                    spending: spending,
+                    onOpen: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => CategoryScreen(auth: widget.auth),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          if (widget.financeOverview) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFE9DB),
+                    foregroundColor: AppColors.deepClay,
+                  ),
+                  onPressed: () async {
+                    if (await _showRecordChoice(context, widget.auth) &&
+                        mounted) {
                       await _reload();
                     }
                   },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Catat uang'),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: QuickAction(
-                  icon: Icons.swap_horiz,
-                  label: 'Pindah dana',
-                  onTap: () async {
-                    if (await _showTransfer(context, widget.auth)) {
+                TextButton.icon(
+                  onPressed: () async {
+                    if (await _showTransfer(context, widget.auth) && mounted) {
                       await _reload();
                     }
                   },
+                  icon: const Icon(Icons.swap_horiz),
+                  label: const Text('Pindah dana'),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => LedgerScreen(auth: widget.auth),
+              ],
+            ),
+          ],
+          if (!widget.financeOverview) ...[
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: QuickAction(
+                    icon: Icons.add,
+                    label: 'Catat uang',
+                    filled: true,
+                    onTap: () async {
+                      if (await _showAddTransaction(context, widget.auth)) {
+                        await _reload();
+                      }
+                    },
+                  ),
                 ),
-              );
-              if (mounted) await _reload();
-            },
-            icon: const Icon(Icons.menu_book_outlined),
-            label: const Text('Lihat akun dan riwayat'),
-          ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: QuickAction(
+                    icon: Icons.swap_horiz,
+                    label: 'Pindah dana',
+                    onTap: () async {
+                      if (await _showTransfer(context, widget.auth)) {
+                        await _reload();
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LedgerScreen(auth: widget.auth),
+                  ),
+                );
+                if (mounted) await _reload();
+              },
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('Lihat akun dan riwayat'),
+            ),
+          ],
           const SizedBox(height: 24),
-          OutlinedButton.icon(
+          TextButton.icon(
             onPressed: () async {
               await Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -1685,7 +1891,7 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.category_outlined),
             label: const Text('Atur kategori & anggaran'),
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 20),
           if (data.currencies.length > 1) ...[
             Text(
               'Mata uang grafik',
@@ -3204,6 +3410,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 if (items.isEmpty) {
                   return DataStateView(
                     icon: Icons.done_all,
+                    mood: TunasMood.wave,
                     title: 'Tidak ada yang menunggu',
                     message:
                         'Usulan dari email akan muncul di sini setelah '
@@ -3238,6 +3445,25 @@ class _ReviewScreenState extends State<ReviewScreen> {
 /// One proposed transaction. Confirm and reject are on the card because the
 /// decision is usually obvious from the amount and the name; nothing here
 /// touches the ledger until one of them is pressed.
+String formatHouseholdDate(DateTime value) {
+  final date = value.toLocal();
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'Mei',
+    'Jun',
+    'Jul',
+    'Agu',
+    'Sep',
+    'Okt',
+    'Nov',
+    'Des',
+  ];
+  return '${date.day} ${months[date.month - 1]} ${date.year}';
+}
+
 class CandidateCard extends StatefulWidget {
   const CandidateCard({
     super.key,
@@ -3365,6 +3591,16 @@ class _CandidateCardState extends State<CandidateCard> {
                   const Icon(Icons.chevron_right, color: AppColors.mutedInk),
                 ],
               ),
+              if (c.occurredAt != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  formatHouseholdDate(c.occurredAt!),
+                  style: const TextStyle(
+                    color: AppColors.mutedInk,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
               const SizedBox(height: 6),
               Text(
                 candidateStatusLine(c),
@@ -4301,6 +4537,11 @@ class SectionHeading extends StatelessWidget {
   }
 }
 
+/// Loading, error, and empty states, with Tunas reacting to which one it is.
+///
+/// The mood comes from the state rather than each caller, so every screen
+/// stays consistent: sleepy while loading, puzzled when something failed,
+/// and content otherwise.
 class DataStateView extends StatelessWidget {
   const DataStateView({
     super.key,
@@ -4310,17 +4551,34 @@ class DataStateView extends StatelessWidget {
     this.loading = false,
     this.actionLabel,
     this.onAction,
+    this.mood,
   });
 
+  /// Kept for callers and screen-reader context; Tunas replaces the glyph.
   final IconData icon;
   final String title;
   final String message;
   final bool loading;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final TunasMood? mood;
+
+  static final _errorIcons = [
+    Icons.cloud_off_outlined,
+    Icons.sync_problem_outlined,
+    Icons.error_outline,
+    Icons.wifi_off_outlined,
+  ].map((icon) => icon.codePoint).toSet();
 
   @override
   Widget build(BuildContext context) {
+    final resolved =
+        mood ??
+        (loading
+            ? TunasMood.sleepy
+            : _errorIcons.contains(icon.codePoint)
+            ? TunasMood.puzzled
+            : TunasMood.idle);
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(30),
@@ -4328,28 +4586,15 @@ class DataStateView extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 340),
           child: Column(
             children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: const BoxDecoration(
-                  color: AppColors.paleMoss,
-                  shape: BoxShape.circle,
+              Tunas(size: 132, mood: resolved),
+              const SizedBox(height: 14),
+              Semantics(
+                liveRegion: loading,
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.headlineMedium,
+                  textAlign: TextAlign.center,
                 ),
-                child: loading
-                    ? const Padding(
-                        padding: EdgeInsets.all(23),
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: AppColors.forest,
-                        ),
-                      )
-                    : Icon(icon, color: AppColors.forest, size: 32),
-              ),
-              const SizedBox(height: 22),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.headlineMedium,
-                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 9),
               Text(
@@ -4388,6 +4633,45 @@ Future<bool> _showAddTransaction(
     builder: (_) => MoneySheet(auth: auth),
   );
   return saved ?? false;
+}
+
+Future<bool> _showRecordChoice(
+  BuildContext context,
+  AuthRepository auth,
+) async {
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    useSafeArea: true,
+    builder: (context) => Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Catat uang', style: Theme.of(context).textTheme.titleLarge),
+          for (final (value, label, icon) in [
+            ('expense', 'Pengeluaran', Icons.arrow_upward),
+            ('income', 'Pemasukan', Icons.arrow_downward),
+            ('transfer', 'Transfer antar akun', Icons.swap_horiz),
+          ])
+            ListTile(
+              leading: Icon(icon),
+              title: Text(label),
+              onTap: () => Navigator.pop(context, value),
+            ),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return false;
+  if (choice == 'transfer') return _showTransfer(context, auth);
+  return await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: AppColors.surface,
+        builder: (_) => MoneySheet(auth: auth, initialType: choice),
+      ) ??
+      false;
 }
 
 Future<bool> _showTransfer(BuildContext context, AuthRepository auth) async {
@@ -4493,9 +4777,14 @@ class LedgerDatePicker extends StatelessWidget {
 }
 
 class MoneySheet extends StatefulWidget {
-  const MoneySheet({super.key, required this.auth});
+  const MoneySheet({
+    super.key,
+    required this.auth,
+    this.initialType = 'expense',
+  });
 
   final AuthRepository auth;
+  final String initialType;
 
   @override
   State<MoneySheet> createState() => _MoneySheetState();
@@ -4511,7 +4800,7 @@ class _MoneySheetState extends State<MoneySheet> {
   String? _categoryId;
   String? _accountId;
   LedgerAccount? _selectedAccount;
-  String _type = 'expense';
+  late String _type = widget.initialType;
   String _entryKind = 'regular';
   DateTime? _occurredAt;
   bool _saving = false;
@@ -4657,7 +4946,7 @@ class _MoneySheetState extends State<MoneySheet> {
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
-                inputFormatters: _selectedAccount?.minorUnit == 0
+                inputFormatters: (_selectedAccount?.minorUnit ?? 0) == 0
                     ? const [ThousandsFormatter()]
                     : null,
                 decoration: InputDecoration(
@@ -4844,21 +5133,21 @@ class _MoneySheetState extends State<MoneySheet> {
                     return const Text('Tidak ada akun yang dapat dikoreksi.');
                   }
                   if (!choices.any((a) => a.id == _accountId)) {
-                    _accountId = choices.first.id;
+                    _accountId = null;
                   }
-                  final initialAccount = _selectedAccount == null;
                   _selectedAccount = choices
                       .where((a) => a.id == _accountId)
                       .firstOrNull;
-                  if (initialAccount) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) setState(() {});
-                    });
-                  }
                   return DropdownButtonFormField<String>(
                     isExpanded: true,
                     initialValue: _accountId,
-                    decoration: const InputDecoration(labelText: 'Dari akun'),
+                    decoration: InputDecoration(
+                      labelText: _type == 'income'
+                          ? 'Ke akun'
+                          : 'Akun pembayaran',
+                    ),
+                    validator: (value) =>
+                        value == null ? 'Pilih akun terlebih dahulu.' : null,
                     items: [
                       for (final account in choices)
                         DropdownMenuItem(
@@ -4870,11 +5159,15 @@ class _MoneySheetState extends State<MoneySheet> {
                         ),
                     ],
                     onChanged: (value) => setState(() {
+                      final previous = _selectedAccount;
                       _accountId = value;
                       _selectedAccount = accounts
                           .where((a) => a.id == value)
                           .firstOrNull;
-                      _amount.clear();
+                      if (previous != null &&
+                          previous.currency != _selectedAccount?.currency) {
+                        _amount.clear();
+                      }
                     }),
                   );
                 },

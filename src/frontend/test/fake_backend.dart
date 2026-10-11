@@ -217,6 +217,111 @@ class FakeBackend {
   Map<String, dynamic>? lastConfirmBody;
   String? rejectedCandidateId;
 
+  /// In-memory household lists, shaped like `src/backend/app/routers/lists.py`.
+  final List<Map<String, dynamic>> lists = [];
+  bool notifyOnAdd = true;
+  int _listSeq = 0;
+  final Map<String, Map<String, dynamic>> _itemsByClientId = {};
+
+  Map<String, dynamic> _listJson(Map<String, dynamic> list) {
+    final items = (list['items'] as List).cast<Map<String, dynamic>>();
+    final open = items.where((i) => i['checked'] != true).toList();
+    return {
+      ...list,
+      'item_count': items.length,
+      'open_count': open.length,
+      'preview': list['kind'] == 'note'
+          ? ((list['body'] as String).isEmpty ? [] : [list['body']])
+          : open.take(3).map((i) => i['text']).toList(),
+      'updated_at': '2026-10-10T10:00:00Z',
+    };
+  }
+
+  http.Response? _lists(String method, String path, String rawBody) {
+    final parts = path.split('/lists').last.split('/')
+      ..removeWhere((p) => p.isEmpty);
+    final body = rawBody.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(rawBody) as Map<String, dynamic>;
+    if (parts.isEmpty && method == 'GET') {
+      return _json(lists.map(_listJson).toList(), 200);
+    }
+    if (parts.isEmpty && method == 'POST') {
+      final list = <String, dynamic>{
+        'id': 'list-${++_listSeq}',
+        'name': (body['name'] as String).trim(),
+        'kind': body['kind'],
+        'icon': body['icon'] ?? 'basket',
+        'tint': body['tint'] ?? 'sage',
+        'version': 1,
+        'body': '',
+        'created_by': signedInName,
+        'items': <Map<String, dynamic>>[],
+      };
+      lists.insert(0, list);
+      return _json(_listJson(list), 201);
+    }
+    if (parts.first == 'preferences') {
+      if (method == 'PATCH') notifyOnAdd = body['items_added'] as bool;
+      return _json({'items_added': notifyOnAdd}, 200);
+    }
+    final list = lists.where((l) => l['id'] == parts.first).firstOrNull;
+    if (list == null) return _error(404, 'list_not_found', 'List not found');
+    final items = (list['items'] as List).cast<Map<String, dynamic>>();
+    if (parts.length == 1) {
+      if (method == 'DELETE') {
+        lists.remove(list);
+        return http.Response('', 204);
+      }
+      if (method == 'PATCH') {
+        if (body['version'] != list['version']) {
+          return _error(409, 'list_conflict', 'Conflict');
+        }
+        if (body['name'] != null) list['name'] = body['name'];
+        if (body['body'] != null) list['body'] = body['body'];
+        if (body['icon'] != null) list['icon'] = body['icon'];
+        if (body['tint'] != null) list['tint'] = body['tint'];
+        list['version'] = (list['version'] as int) + 1;
+      }
+      return _json(_listJson(list), 200);
+    }
+    if (parts[1] == 'clear-checked') {
+      items.removeWhere((i) => i['checked'] == true);
+      return _json(_listJson(list), 200);
+    }
+    if (parts[1] == 'items' && parts.length == 2) {
+      final replay = _itemsByClientId[body['client_id']];
+      if (replay != null) return _json(replay, 201);
+      final item = <String, dynamic>{
+        'id': 'item-${items.length + 1}-${list['id']}',
+        'client_id': body['client_id'],
+        'text': body['text'],
+        'quantity': body['quantity'],
+        'note': body['note'],
+        'checked': false,
+        'checked_by': null,
+        'added_by': signedInName,
+      };
+      items.add(item);
+      _itemsByClientId[body['client_id'] as String] = item;
+      return _json(item, 201);
+    }
+    final item = items.where((i) => i['id'] == parts[2]).firstOrNull;
+    if (item == null) return _error(404, 'list_item_not_found', 'Gone');
+    if (method == 'DELETE') {
+      items.remove(item);
+      return http.Response('', 204);
+    }
+    for (final key in ['text', 'quantity', 'note']) {
+      if (body.containsKey(key)) item[key] = body[key];
+    }
+    if (body['checked'] != null) {
+      item['checked'] = body['checked'];
+      item['checked_by'] = body['checked'] == true ? signedInName : null;
+    }
+    return _json(item, 200);
+  }
+
   /// When true every request fails the way a lost connection does, before any
   /// response exists to inspect.
   bool offline = false;
@@ -257,6 +362,11 @@ class FakeBackend {
         !path.endsWith('/auth/logout')) {
       expiredCalls++;
       return _error(401, 'invalid_token', 'Token kedaluwarsa.');
+    }
+
+    if (path.contains('/api/v1/lists')) {
+      final response = _lists(method, path, request.body);
+      if (response != null) return response;
     }
 
     if (path.endsWith('/onboarding/household') && method == 'POST') {

@@ -1,11 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rumpun_frontend/household_home.dart';
 import 'package:rumpun_frontend/main.dart';
 
 import 'fake_backend.dart';
 
 /// The charts label only their busiest column, so touching one is how a week
 /// is read precisely. These hold that gesture in place.
+Future<void> reveal(WidgetTester tester, Finder target) async {
+  await tester.scrollUntilVisible(
+    target,
+    200,
+    scrollable: find
+        .descendant(
+          of: find.byType(FinanceScreen),
+          matching: find.byType(Scrollable),
+        )
+        .last,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   Future<void> pumpHome(WidgetTester tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -51,14 +66,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Keuangan'));
+    await tester.pumpAndSettle();
   }
 
   testWidgets('holding a bar names that week and its amount', (tester) async {
     await pumpHome(tester);
 
+    await reveal(tester, find.byType(SpendingChart));
     // At rest the caption reports the last finished week.
     expect(find.text('Minggu 17 Agu Rp 486.000'), findsOneWidget);
-
     final chart = tester.getRect(find.byType(SpendingChart));
     // The first of four slots, so the leftmost quarter of the chart.
     final gesture = await tester.startGesture(
@@ -92,11 +109,8 @@ void main() {
   ) async {
     await pumpHome(tester);
     // The second chart sits below the fold on a 390x844 screen.
-    await tester.dragUntilVisible(
-      find.byType(NetWorthChart),
-      find.byType(ListView),
-      const Offset(0, -160),
-    );
+    await reveal(tester, find.byType(NetWorthChart));
+    await tester.drag(find.byType(NetWorthChart), const Offset(0, -120));
     await tester.pumpAndSettle();
     expect(find.text('Sekarang Rp 9.650.000'), findsOneWidget);
 
@@ -116,6 +130,7 @@ void main() {
     tester,
   ) async {
     await pumpHome(tester);
+    await reveal(tester, find.byType(SpendingChart));
     final before = tester.getRect(find.byType(SpendingChart)).top;
 
     // The scrubber claims horizontal drags only. Claiming vertical ones would
@@ -151,10 +166,11 @@ void main() {
     await tester.pumpWidget(RumpunApp(auth: fake.repository));
     await tester.pumpAndSettle();
     expect(fake.backend.lastTrendCurrency, isNull);
+    await tester.tap(find.text('Keuangan'));
+    await tester.pumpAndSettle();
 
     final sgd = find.byKey(const Key('trend-currency-SGD'));
-    await tester.ensureVisible(sgd);
-    await tester.pumpAndSettle();
+    await reveal(tester, sgd);
     final before = tester.getRect(sgd).top;
     await tester.tap(sgd);
     await tester.pumpAndSettle();

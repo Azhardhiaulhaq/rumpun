@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'api_client.dart';
@@ -9,6 +10,14 @@ import 'token_store.dart';
 /// `aud` against this exact value, so the Android and iOS client IDs will not
 /// work here.
 const _googleServerClientId = String.fromEnvironment('RUMPUN_GOOGLE_CLIENT_ID');
+const _googleIosServerClientId = String.fromEnvironment(
+  'RUMPUN_GOOGLE_IOS_CLIENT_ID',
+);
+
+String get _platformGoogleServerClientId =>
+    defaultTargetPlatform == TargetPlatform.iOS
+    ? _googleIosServerClientId
+    : _googleServerClientId;
 
 /// Raised when the app was built without a Google client ID. Sign-in is the
 /// only way in, so this is a build error the user needs to see, not a silently
@@ -51,7 +60,8 @@ class AuthRepository extends ChangeNotifier {
   }) : _client = client ?? ApiClient(),
        _store = store ?? const SecureTokenStore(),
        _google = google ?? const PluginGoogleAuthenticator(),
-       _googleConfigured = googleConfigured ?? _googleServerClientId.isNotEmpty;
+       _googleConfigured =
+           googleConfigured ?? _platformGoogleServerClientId.isNotEmpty;
 
   final ApiClient _client;
   final TokenStore _store;
@@ -70,6 +80,7 @@ class AuthRepository extends ChangeNotifier {
   Future<bool>? _refreshing;
 
   AuthSession? get session => _session;
+  String get apiBaseUrl => _client.baseUrl;
   bool get isSignedIn => _session != null;
   bool get isConfigured => _googleConfigured;
 
@@ -89,7 +100,7 @@ class AuthRepository extends ChangeNotifier {
 
   Future<void> _ensureGoogleInitialized() async {
     if (_googleReady) return;
-    await _google.initialize(_googleServerClientId);
+    await _google.initialize(_platformGoogleServerClientId);
     _googleReady = true;
   }
 
@@ -492,6 +503,21 @@ class AuthRepository extends ChangeNotifier {
 
   Future<HouseholdPeople> people() => _authed(_client.people);
 
+  Future<Object?> locationRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _authed(
+    (token) => _client.locationRequest(method, path, token, body: body),
+  );
+
+  Future<Object?> listsRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) =>
+      _authed((token) => _client.listsRequest(method, path, token, body: body));
+
   Future<void> invite({required String email, required String role}) => _authed(
     (token) => _client.invite(accessToken: token, email: email, role: role),
   );
@@ -501,6 +527,15 @@ class AuthRepository extends ChangeNotifier {
   );
 
   Future<void> signOut() async {
+    try {
+      await const MethodChannel('rumpun/location').invokeMethod('stop');
+    } on MissingPluginException {
+      debugPrint('Native location service unavailable on this platform.');
+    } on PlatformException {
+      debugPrint(
+        'Native location shutdown failed; server expiry remains enforced.',
+      );
+    }
     final registration = _pushRegistration;
     if (registration != null) {
       try {

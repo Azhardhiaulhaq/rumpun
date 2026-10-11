@@ -5,10 +5,17 @@ import 'api/auth_repository.dart';
 import 'api/models.dart';
 import 'main.dart';
 
+enum LedgerView { all, accounts, history }
+
 class LedgerScreen extends StatefulWidget {
-  const LedgerScreen({super.key, required this.auth});
+  const LedgerScreen({
+    super.key,
+    required this.auth,
+    this.view = LedgerView.all,
+  });
 
   final AuthRepository auth;
+  final LedgerView view;
 
   @override
   State<LedgerScreen> createState() => _LedgerScreenState();
@@ -142,10 +149,12 @@ class _LedgerScreenState extends State<LedgerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.paper,
-      appBar: AppBar(
-        backgroundColor: AppColors.paper,
-        title: const Text('Akun & catatan'),
-      ),
+      appBar: widget.view == LedgerView.all
+          ? AppBar(
+              backgroundColor: AppColors.paper,
+              title: const Text('Akun & catatan'),
+            )
+          : null,
       body: FutureBuilder<_LedgerData>(
         future: _future,
         builder: (context, snapshot) {
@@ -167,6 +176,7 @@ class _LedgerScreenState extends State<LedgerScreen> {
             );
           }
           final data = snapshot.data!;
+          String? previousKind;
           final balances = {
             for (final a in data.dashboard.holdings) a.accountId: a,
           };
@@ -177,198 +187,219 @@ class _LedgerScreenState extends State<LedgerScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
               children: [
-                Text(
-                  'Akun dan aset',
-                  style: Theme.of(context).textTheme.headlineMedium,
-                ),
-                const SizedBox(height: 5),
-                const Text(
-                  'Nilai tiap mata uang tetap terpisah. Aset dinilai sesuai catatan terakhirmu.',
-                  style: TextStyle(color: AppColors.mutedInk, height: 1.4),
-                ),
-                if (_canWrite) ...[
-                  const SizedBox(height: 18),
-                  FilledButton.icon(
-                    onPressed: _addAccount,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Tambah akun atau aset'),
-                  ),
-                ],
-                const SizedBox(height: 20),
-                if (data.accounts.isEmpty)
-                  const _LedgerNote(
-                    'Belum ada akun. Tambahkan tempat uang atau aset untuk mulai mencatat.',
-                  )
-                else
-                  ...data.accounts.map((account) {
-                    final balance = balances[account.id];
-                    final canValue = const {
-                      'investment',
-                      'physical_asset',
-                      'other',
-                    }.contains(account.kind);
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Material(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: canValue
-                              ? () => _openValuation(account)
-                              : null,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  _kindIcon(account.kind),
-                                  color: AppColors.forest,
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        account.name,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      Text(
-                                        '${_kindLabel(account.kind)} · ${account.currency}${account.unit == null ? '' : ' · ${account.unit}'}',
-                                        style: const TextStyle(
-                                          color: AppColors.mutedInk,
-                                          fontSize: 12.5,
-                                        ),
-                                      ),
-                                      if (balance?.quantity != null)
-                                        Text(
-                                          '${_trimQuantity(balance!.quantity!)} ${account.unit ?? ''}',
-                                          style: const TextStyle(
-                                            color: AppColors.mutedInk,
-                                            fontSize: 12.5,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Text(
-                                        balance?.balance.format() ??
-                                            Money(
-                                              atomic: 0,
-                                              currency: account.currency,
-                                              minorUnit: account.minorUnit,
-                                            ).format(),
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.forest,
-                                        ),
-                                        textAlign: TextAlign.end,
-                                      ),
-                                      if (canValue)
-                                        Text(
-                                          balance?.valuedAt == null
-                                              ? 'Catat nilai'
-                                              : 'Lihat nilai',
-                                          style: const TextStyle(
-                                            color: AppColors.deepClay,
-                                            fontSize: 12.5,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                const SizedBox(height: 24),
-                Text(
-                  'Riwayat transaksi',
-                  style: Theme.of(context).textTheme.headlineMedium,
-                ),
-                const SizedBox(height: 10),
-                if (entries.isEmpty)
-                  const _LedgerNote(
-                    'Belum ada transaksi. Catat uang masuk, keluar, atau pindah dana dari beranda.',
-                  )
-                else
-                  ...entries.map(
-                    (entry) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Material(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
-                          onTap: () => _openEntry(entry, data.accounts),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Text(
-                                  entry.description,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${_transactionLabel(entry)} · ${_formatDate(entry.occurredAt)}',
-                                  style: const TextStyle(
-                                    color: AppColors.mutedInk,
-                                    fontSize: 12.5,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  entry.amount.format(
-                                    signed: true,
-                                    sign: entry.direction == 'out' ? -1 : 1,
-                                  ),
-                                  textAlign: TextAlign.end,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.forest,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_pageError != null) ...[
-                  const SizedBox(height: 8),
+                if (widget.view != LedgerView.history) ...[
                   Text(
-                    _pageError!,
-                    style: const TextStyle(color: AppColors.deepClay),
+                    'Akun dan aset',
+                    style: Theme.of(context).textTheme.headlineMedium,
                   ),
-                ],
-                if (nextCursor != null)
-                  TextButton(
-                    onPressed: _loadingMore
-                        ? null
-                        : () => _loadMore(nextCursor),
-                    child: Text(
-                      _loadingMore
-                          ? 'Memuat transaksi…'
-                          : 'Tampilkan lebih lama',
+                  const SizedBox(height: 5),
+                  const Text(
+                    'Nilai tiap mata uang tetap terpisah. Aset dinilai sesuai catatan terakhirmu.',
+                    style: TextStyle(color: AppColors.mutedInk, height: 1.4),
+                  ),
+                  if (_canWrite) ...[
+                    const SizedBox(height: 18),
+                    FilledButton.icon(
+                      onPressed: _addAccount,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Tambah akun atau aset'),
                     ),
+                  ],
+                  const SizedBox(height: 20),
+                  if (data.accounts.isEmpty)
+                    const _LedgerNote(
+                      'Belum ada akun. Tambahkan tempat uang atau aset untuk mulai mencatat.',
+                    )
+                  else
+                    ...([
+                      ...data.accounts,
+                    ]..sort((a, b) => a.kind.compareTo(b.kind))).map((account) {
+                      final showHeading = previousKind != account.kind;
+                      previousKind = account.kind;
+                      final balance = balances[account.id];
+                      final canValue = const {
+                        'investment',
+                        'physical_asset',
+                        'other',
+                      }.contains(account.kind);
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (showHeading)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(0, 16, 0, 12),
+                              child: Text(
+                                _kindLabel(account.kind),
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Material(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(16),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(16),
+                                onTap: canValue
+                                    ? () => _openValuation(account)
+                                    : null,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        _kindIcon(account.kind),
+                                        color: AppColors.forest,
+                                      ),
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              account.name,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            Text(
+                                              '${_kindLabel(account.kind)} · ${account.currency}${account.unit == null ? '' : ' · ${account.unit}'}',
+                                              style: const TextStyle(
+                                                color: AppColors.mutedInk,
+                                                fontSize: 12.5,
+                                              ),
+                                            ),
+                                            if (balance?.quantity != null)
+                                              Text(
+                                                '${_trimQuantity(balance!.quantity!)} ${account.unit ?? ''}',
+                                                style: const TextStyle(
+                                                  color: AppColors.mutedInk,
+                                                  fontSize: 12.5,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            Text(
+                                              canValue &&
+                                                      balance?.valuedAt == null
+                                                  ? 'Belum dinilai'
+                                                  : balance?.balance.format() ??
+                                                        'Saldo belum tersedia',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                                color: AppColors.forest,
+                                              ),
+                                              textAlign: TextAlign.end,
+                                            ),
+                                            if (canValue)
+                                              Text(
+                                                balance?.valuedAt == null
+                                                    ? 'Catat nilai'
+                                                    : 'Lihat nilai',
+                                                style: const TextStyle(
+                                                  color: AppColors.deepClay,
+                                                  fontSize: 12.5,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
+                ],
+                if (widget.view != LedgerView.accounts) ...[
+                  const SizedBox(height: 24),
+                  Text(
+                    'Riwayat transaksi',
+                    style: Theme.of(context).textTheme.headlineMedium,
                   ),
+                  const SizedBox(height: 10),
+                  if (entries.isEmpty)
+                    const _LedgerNote(
+                      'Belum ada transaksi. Catat uang masuk, keluar, atau pindah dana dari beranda.',
+                    )
+                  else
+                    ...entries.map(
+                      (entry) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Material(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(12),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => _openEntry(entry, data.accounts),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    entry.description,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${_transactionLabel(entry)} · ${_formatDate(entry.occurredAt)}',
+                                    style: const TextStyle(
+                                      color: AppColors.mutedInk,
+                                      fontSize: 12.5,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    entry.amount.format(
+                                      signed: true,
+                                      sign: entry.direction == 'out' ? -1 : 1,
+                                    ),
+                                    textAlign: TextAlign.end,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.forest,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_pageError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _pageError!,
+                      style: const TextStyle(color: AppColors.deepClay),
+                    ),
+                  ],
+                  if (nextCursor != null)
+                    TextButton(
+                      onPressed: _loadingMore
+                          ? null
+                          : () => _loadMore(nextCursor),
+                      child: Text(
+                        _loadingMore
+                            ? 'Memuat transaksi…'
+                            : 'Tampilkan lebih lama',
+                      ),
+                    ),
+                ],
               ],
             ),
           );

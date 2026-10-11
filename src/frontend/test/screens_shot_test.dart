@@ -137,6 +137,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Keuangan'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Tinjau'));
     await tester.pumpAndSettle();
     await expectLater(

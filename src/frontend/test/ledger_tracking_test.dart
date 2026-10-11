@@ -2,13 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rumpun_frontend/api/models.dart';
 import 'package:rumpun_frontend/main.dart';
+import 'package:rumpun_frontend/ledger_screen.dart';
 
 import 'fake_backend.dart';
 
 Future<void> openLedger(WidgetTester tester) async {
-  final action = find.text('Lihat akun dan riwayat');
-  await tester.ensureVisible(action);
-  await tester.tap(action);
+  await tester.tap(find.text('Keuangan'));
+  await tester.pumpAndSettle();
+  final shell = tester.widget<AppShell>(find.byType(AppShell));
+  Navigator.of(tester.element(find.byType(AppShell))).push(
+    MaterialPageRoute<void>(builder: (_) => LedgerScreen(auth: shell.auth)),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -108,7 +112,11 @@ void main() {
     );
     await tester.pumpWidget(RumpunApp(auth: fake.repository));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Keuangan'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Catat uang'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pengeluaran'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Masuk / keluar'));
     await tester.pumpAndSettle();
@@ -116,6 +124,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextFormField).at(0), '250000');
     await tester.enterText(find.byType(TextFormField).at(1), 'Saldo pembuka');
+    final picker = find.byType(DropdownButtonFormField<String>).last;
+    await tester.ensureVisible(picker);
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tabungan · IDR').last);
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Tanggal: hari ini'));
     await tester.tap(find.text('Tanggal: hari ini'));
     await tester.pumpAndSettle();
@@ -156,6 +170,8 @@ void main() {
       ],
     );
     await tester.pumpWidget(RumpunApp(auth: fake.repository));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Keuangan'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Pindah dana'));
     await tester.pumpAndSettle();
