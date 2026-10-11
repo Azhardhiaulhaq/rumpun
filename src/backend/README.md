@@ -104,6 +104,9 @@ All application endpoints use `/api/v1`.
 - `POST /gmail/sync`
 - `GET /gmail/sync/{job_id}`
 - `POST /notifications/devices`
+- `GET|POST /lists`, `GET|PATCH|DELETE /lists/{id}`
+- `POST /lists/{id}/items`, `PATCH|DELETE /lists/{id}/items/{item_id}`, `POST /lists/{id}/clear-checked`
+- `GET|PATCH /lists/preferences`
 - `DELETE /notifications/devices`
 
 Authenticated routes accept `Authorization: Bearer <access-token>`. `X-Household-ID` selects an active household, and membership is verified in the same query. If omitted, the earliest membership is selected. Confirmation requires `Idempotency-Key`.

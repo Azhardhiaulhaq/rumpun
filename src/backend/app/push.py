@@ -13,6 +13,7 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from app.list_notifications import LIST_KIND, refresh_for_delivery
 from app.location_notifications import LOCATION_KINDS, delivery_allowed
 from app.models import (
     AccountKind,
@@ -276,6 +277,9 @@ def dispatch_pending(db: Session, sender: PushSender, *, limit: int = 100) -> in
             event.status = "cancelled"
             continue
         if event.kind in LOCATION_KINDS and not delivery_allowed(db, event):
+            event.status = "cancelled"
+            continue
+        if event.kind == LIST_KIND and not refresh_for_delivery(db, event):
             event.status = "cancelled"
             continue
         if event.kind == _REVIEW_KIND:

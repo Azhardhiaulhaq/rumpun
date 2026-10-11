@@ -23,6 +23,7 @@ from app.routers import (
     gmail,
     household,
     inbox,
+    lists,
     location,
     notifications,
     onboarding,
@@ -147,3 +148,4 @@ app.include_router(inbox.router, prefix="/api/v1")
 app.include_router(gmail.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(location.router, prefix="/api/v1")
+app.include_router(lists.router, prefix="/api/v1")
