@@ -13,6 +13,7 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from app.location_notifications import LOCATION_KINDS, delivery_allowed
 from app.models import (
     AccountKind,
     CandidateState,
@@ -53,7 +54,10 @@ class FirebaseSender:
                     "token": token,
                     "notification": {"title": title, "body": body},
                     "data": data,
-                    "android": {"collapse_key": key[:64]},
+                    "android": {
+                        "collapse_key": key[:64],
+                        **({"ttl": "60s"} if data.get("kind") in LOCATION_KINDS else {}),
+                    },
                     "apns": {"headers": {"apns-collapse-id": key[:64]}},
                 }
             },
@@ -269,6 +273,9 @@ def dispatch_pending(db: Session, sender: PushSender, *, limit: int = 100) -> in
             )
         )
         if member is None:
+            event.status = "cancelled"
+            continue
+        if event.kind in LOCATION_KINDS and not delivery_allowed(db, event):
             event.status = "cancelled"
             continue
         if event.kind == _REVIEW_KIND:

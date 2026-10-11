@@ -55,6 +55,13 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  location-cleanup:
+    <<: *backend
+    command: ["python", "-m", "app.location_cleanup"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   push-worker:
     <<: *backend
     command: ["sh", "-c", "while true; do python -m app.push_worker; sleep 30; done"]

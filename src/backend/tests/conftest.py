@@ -132,3 +132,36 @@ def membership_household_accounts(db: Session, household_id: uuid.UUID):  # type
     from app.models import FinancialAccount
 
     return db.query(FinancialAccount).filter_by(household_id=household_id).all()
+
+
+@pytest.fixture
+def partner(db: Session, registered: dict[str, object]) -> dict[str, object]:
+    """A second household member, so household-wide notifications have a recipient."""
+    from app.config import get_settings
+    from app.models import MembershipRole, User
+    from app.security import create_access_token
+
+    household = registered["household"]
+    assert isinstance(household, dict)
+    user = User(
+        email="partner@example.com",
+        normalized_email="partner@example.com",
+        display_name="Partner",
+    )
+    db.add(user)
+    db.flush()
+    db.add(
+        Membership(
+            household_id=uuid.UUID(str(household["id"])),
+            user_id=user.id,
+            role=MembershipRole.ADMIN,
+        )
+    )
+    db.commit()
+    return {
+        "user": user,
+        "headers": {
+            "Authorization": f"Bearer {create_access_token(user.id, get_settings())}",
+            "X-Household-ID": str(household["id"]),
+        },
+    }
