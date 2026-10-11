@@ -141,19 +141,27 @@ class StandardGoogleTokenVerifier:
         self.settings = settings
 
     def verify(self, token: str) -> dict[str, Any]:
-        if not self.settings.google_client_id:
+        audiences = tuple(
+            client_id
+            for client_id in (
+                self.settings.google_client_id,
+                self.settings.google_ios_client_id,
+            )
+            if client_id
+        )
+        if not audiences:
             raise ApiError(503, "google_login_not_configured", "Google login is not configured")
         try:
             claims = id_token.verify_oauth2_token(  # type: ignore[no-untyped-call]
                 token,
                 google_requests.Request(),
-                audience=self.settings.google_client_id,
+                audience=audiences[0] if len(audiences) == 1 else list(audiences),
             )
         except ValueError as exc:
             raise ApiError(401, "invalid_google_token", "Google ID token is invalid") from exc
         if claims.get("iss") not in self.settings.google_issuers:
             raise ApiError(401, "invalid_google_issuer", "Google ID token issuer is invalid")
-        if claims.get("aud") != self.settings.google_client_id:
+        if claims.get("aud") not in audiences:
             raise ApiError(401, "invalid_google_audience", "Google ID token audience is invalid")
         if not claims.get("email_verified") or not claims.get("sub") or not claims.get("email"):
             raise ApiError(401, "unverified_google_identity", "Google identity is not verified")

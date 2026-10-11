@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_days: int = 30
     google_client_id: str | None = None
+    google_ios_client_id: str | None = None
     google_issuers: tuple[str, ...] = ("accounts.google.com", "https://accounts.google.com")
     gmail_oauth_client_id: str | None = None
     gmail_oauth_client_secret: str | None = None
